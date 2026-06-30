@@ -46,3 +46,6 @@ out/
 .claude/
 .benchmarks/
 .pytest_cache/
+
+# Local export/snapshot folder (a copy of the tracked tree, not source)
+GIT AI SLOP/
