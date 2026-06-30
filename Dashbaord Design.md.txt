@@ -1,0 +1,187 @@
+# AI Slop Quarantine Guard — Dashboard: Design System + 4-Page Build
+
+## Context
+
+The project (`D:\Projects-AI Slop Quarantine Guard & Live Meeting Wingman\AI Slop Quarantine Guard\Code Workspace`)
+is a GitHub App that scans every pull request for "AI slop" — hallucinated packages, leaked
+secrets, CVEs, risky licenses, SAST issues, placeholder code, and committed AI scratchpads
+(checks `SQG001`–`SQG007`). Backend is FastAPI + Postgres + arq. The `web/` frontend is a bare
+Next.js 15 shell — `app/page.tsx` is a 6-line placeholder, Tailwind is configured but **not even
+installed**, no components, no design tokens, no `globals.css`. Clean slate.
+
+Goal: build a **black, futuristic, minimalist analytics dashboard** that fuses the best of four
+reference dashboards, plus a **reusable `DESIGN.md`** (Google `design.md` format) so the design
+system is captured once and re-read by agents across sessions — no re-explaining tokens each time.
+
+**Locked decisions (from user):**
+1. **Brand name on UI:** "AI Slop Quarantine Guard" (codename). *Note: PRD §line 4 explicitly marks
+   this codename as pejorative/internal-only and mandates a neutral customer-facing name
+   ("PR Quality & Security Gate"). User chose the codename anyway — recorded here as a deliberate
+   override. Trivial to swap later: it lives in one token (`name`) + one wordmark component.*
+2. **Scope:** Full 4-page app — Overview, Analyses list, Analysis detail, Settings — wired to mock data.
+3. **3D:** Both — real WebGL hero (react-three-fiber) **and** CSS/Framer depth on cards.
+4. **Gradient:** **Aurora** — cool indigo→teal→emerald brand spectrum; severity stays a separate warm ramp.
+
+---
+
+## Design System — "Aurora on Black"
+
+### Color tokens
+
+**Surfaces (cool near-black, layered for elevation):**
+| Token | Value | Use |
+|---|---|---|
+| `bg` | `#06080A` | app background |
+| `surface` | `#0E1116` | cards, panels |
+| `surface-elevated` | `#141922` | popovers, hovered cards, modals |
+| `border` | `rgba(120,140,255,0.12)` | hairline glass borders (indigo-tinted) |
+| `border-strong` | `rgba(120,140,255,0.22)` | focus / active edges |
+
+**Brand — Aurora gradient (identity, primary CTAs, active nav, hero):**
+| Token | Value |
+|---|---|
+| `brand-indigo` | `#4A5BFF` |
+| `brand-teal` | `#16C8D4` |
+| `brand-emerald` | `#2DE08A` |
+| `brand-gradient` | `linear-gradient(120deg, #4A5BFF 0%, #16C8D4 52%, #2DE08A 100%)` |
+| `scan` | `#22D3EE` (live/in-progress pulse, scan-beam) |
+
+**Severity ramp (separate WARM axis — color always = meaning, never mixed with brand):**
+| Token | Value | Maps to |
+|---|---|---|
+| `sev-certain` | `#FF3B5C` crimson | CERTAIN / block-eligible (SQG001, SQG002) |
+| `sev-high` | `#FF8A3D` amber | HIGH (SQG004/005/006) |
+| `sev-medium` | `#FFC83D` gold | MEDIUM (SQG003/007) |
+| `sev-clean` | `#2DE08A` emerald | clean pass (reuses brand-emerald → "all clear" reads on-brand) |
+
+**Text:** `text` `#EAEEF6` · `text-muted` `#9AA4B2` · `text-faint` `#5B6472` (all ≥4.5:1 on surfaces).
+
+### Typography
+- **Display** (bold uppercase headers, à la CheckBox ref): `Space Grotesk` 600/700.
+- **Body / UI:** `Inter` 400/500/600.
+- **Mono** (code evidence, SHAs, line numbers, tabular KPI numbers): `JetBrains Mono`.
+- All via `next/font/google` (no extra dep). Scale: 12 / 14 / 16 / 20 / 28 / 40 / 56. Body 16, line-height 1.5. Tabular figures for all numeric data.
+
+### Radius / spacing / effects
+- Radius scale: `sm` 10px · `md` 16px · `lg` 22px · `full`. Cards default `lg` (soft, Financial-ref feel).
+- Spacing: 4/8 rhythm (4 8 12 16 24 32 48 64).
+- **Glass:** `background: rgba(18,22,30,0.6); backdrop-filter: blur(18px) saturate(140%);` + 1px aurora border + soft inner top-highlight.
+- **Glow:** aurora radial glows behind hero/active cards (`box-shadow` + blurred pseudo-element), low opacity.
+
+### Motion (Framer Motion; respect `prefers-reduced-motion`)
+- Micro 150–220ms ease-out; card entrance staggered 40ms; numbers count-up on mount.
+- Live polling → `scan` shimmer sweep on `in_progress` rows.
+- Spring physics for hover lift (`scale 1.02`, translateY -2px). Exit ~65% of enter duration.
+- Reduced-motion → all replaced by instant opacity; 3D core renders a static frame.
+
+### 3D (both modes)
+- **WebGL hero** (`react-three-fiber` + `drei`): a slowly rotating translucent icosahedron "trust core"
+  with a wireframe shell, an emissive **scan-ring** sweeping top→bottom, and faint particles drifting
+  inward (each = an incoming PR). Aurora-tinted material. Capped DPR, paused when offscreen,
+  static fallback for reduced-motion / no-WebGL.
+- **CSS/Framer faux-3D** elsewhere: perspective tilt on hover for KPI cards, layered parallax glow,
+  depth via stacked translucent planes. No three.js on non-hero routes (keeps them light).
+
+---
+
+## Deliverable 1 — `DESIGN.md` (reusable, Google `design.md` format)
+
+Write `web/DESIGN.md` with YAML frontmatter (machine-readable tokens) + markdown body (rationale,
+motion principles, chart system, do/don't). Frontmatter mirrors the tokens above under
+`colors:`, `typography:`, `rounded:`, `spacing:`, `components:`.
+
+Close the loop with the CLI the user installed:
+- `designmd lint web/DESIGN.md` → must pass (validates structure + WCAG contrast on token pairs).
+- `designmd export css-tailwind web/DESIGN.md` → emits Tailwind `@theme` CSS; use as the source of
+  truth that the Tailwind theme + `globals.css` CSS variables are generated from, so DESIGN.md and
+  code never drift.
+
+---
+
+## Deliverable 2 — The 4-page dashboard
+
+### Stack additions (install in `web/`)
+- `tailwindcss postcss autoprefixer` — **not currently installed**; init `globals.css` + PostCSS.
+- `shadcn/ui` (`npx shadcn@latest init`) → add: card, badge, button, table, tabs, dialog, input,
+  label, switch, select, textarea, skeleton, separator, tooltip, dropdown-menu, sonner (toast).
+- `lucide-react` (icons — one family, consistent stroke).
+- `framer-motion` (2D motion).
+- `three @react-three/fiber @react-three/drei` (WebGL hero).
+- `recharts` for standard area/bar; **custom SVG + Framer** for signature visuals (radial gauge,
+  dot-grid density, gantt timeline) where exact gradient/animation control matters.
+
+### File structure (under `web/`)
+```
+app/
+  globals.css                 # token CSS vars (generated from DESIGN.md) + base
+  layout.tsx                  # fonts, <Sidebar>, aurora backdrop, Toaster
+  page.tsx                    # → redirect to /dashboard
+  dashboard/page.tsx          # Overview (showcase)
+  analyses/page.tsx           # Analyses list (PR history)
+  analyses/[id]/page.tsx      # Analysis detail (findings)
+  settings/page.tsx           # Settings
+components/
+  ui/                         # shadcn generated
+  three/TrustCore.tsx         # R3F hero (dynamic import, ssr:false)
+  layout/Sidebar.tsx          # left icon rail + wordmark
+  layout/Topbar.tsx           # pill nav + search + account (CheckBox-style)
+  layout/AuroraBackdrop.tsx   # animated gradient-mesh background
+  charts/RadialGauge.tsx      # clean-pass-rate hero gauge (Financial donut)
+  charts/AreaTrend.tsx        # findings-over-time, gradient fill + dashed forecast (Stakent/nixtio)
+  charts/DotDensity.tsx       # per-PR finding density dot-grid (nixtio/CheckBox)
+  charts/SeverityBars.tsx     # findings by SQG check (CheckBox candlestick pills)
+  charts/PipelineTimeline.tsx # recent runs as gantt bars (CheckBox timeline)
+  dashboard/KpiCard.tsx       # glass stat card w/ count-up + sparkline + hover tilt
+  dashboard/GradientCta.tsx   # "Connect a repo" gradient feature card (nixtio/Stakent)
+  findings/FindingCard.tsx    # collapsible evidence snippet + fix suggestion
+  findings/SeverityBadge.tsx  # CERTAIN/HIGH/MEDIUM/CLEAN pill
+  findings/StatusBadge.tsx    # in_progress(scan-pulse)/completed/failed/degraded
+  settings/SettingsForm.tsx
+lib/
+  types.ts                    # Installation, AnalysisSummary, AnalysisDetail, Finding, Evidence,
+                              #   RepoSettings, Confidence, AnalysisStatus, TrustStatus, RuleId
+  mock-data.ts                # realistic fixtures (SQG001–007 findings, evidence, timings, cost)
+  checks.ts                   # SQG catalog metadata (id→name/category/confidence/blockable)
+  format.ts                   # number/duration/cost/relative-time formatters (locale-aware)
+```
+Types derived strictly from `docs/DATA_MODEL.md` + `docs/API_SPEC.md` (real field names: `confidence`,
+`block_eligible`, `trust_status`, `duration_ms`, `cost_usd`, `evidence.{snippet,context_before,context_after}`).
+
+### Page specs
+
+**1. `/dashboard` — Overview (the showcase)**
+- Topbar: wordmark + pill nav (Overview / Analyses / Settings) + search + account (CheckBox style).
+- Hero band: WebGL **TrustCore** (left) + **RadialGauge** "Clean Pass Rate %" (Financial donut) + 3 KPI cards (PRs analyzed, CERTAIN findings blocked, p95 analysis time — count-up, hover-tilt).
+- Row 2: `AreaTrend` (findings over 30 days, aurora gradient fill + dashed forecast) + `SeverityBars` (findings by SQG check).
+- Row 3: `PipelineTimeline` (recent analyses as gantt: queued→fetch→analyze→post, scan-pulse on in_progress) + `GradientCta` ("Connect a repository", aurora feature card).
+- Trust-status strip: "completed / degraded / failed" distribution — visualizes the PRD "never lie / fail-safe" promise.
+
+**2. `/analyses` — PR history**
+- Filterable, paginated table (shadcn): repo · PR# · title · status · finding counts by severity (mini dot-density) · duration · cost · time. Row → detail. 5s polling shimmer while any `in_progress`. Empty + loading skeletons.
+
+**3. `/analyses/[id]` — Analysis detail**
+- PR header (repo/owner, PR#, head SHA mono, base→head refs, status, duration, cost).
+- Findings grouped CERTAIN → HIGH → MEDIUM via `FindingCard`: rule badge, file:line (mono), message, collapsible **evidence** snippet (mono, context_before/after dimmed, offending line crimson), `fix_suggestion` callout. Clean state → big emerald all-clear with the TrustCore at rest.
+
+**4. `/settings` — Per-repo config**
+- `SettingsForm`: `block_mode` switch (with Phase-9 advisory note), `blocked_rules` multiselect (SQG001/002), `ai_enabled` switch + `ai_model` select, `path_allowlist`/`rule_allowlist` textareas, `retain_findings_days` select. Optimistic save → sonner toast. Destructive/blocking emphasized + separated.
+
+### A11y / quality floor (from ui-ux-pro-max)
+- Dark-mode contrast: text ≥4.5:1, secondary ≥3:1, borders visible — verified independently.
+- Severity never color-only: every badge has icon + text label.
+- Focus rings on all interactive els; keyboard nav; charts get text summary / data-table fallback + tooltips on hover *and* focus.
+- Touch targets ≥44px; `prefers-reduced-motion` fully honored (3D static, no count-up/parallax).
+
+---
+
+## Verification
+1. `cd web && npm install && npm run dev` → app boots on :3000, no console errors.
+2. All 4 routes render with mock data; navigate between them; back preserves state.
+3. `designmd lint web/DESIGN.md` → passes (structure + contrast).
+4. `designmd export css-tailwind web/DESIGN.md` → emits theme; confirm tokens match `globals.css`.
+5. `npm run build` → clean production build (3D hero dynamically imported, `ssr:false`).
+6. Toggle OS reduced-motion → animations/3D degrade gracefully; toggle to 375px width → no horizontal scroll, layout reflows.
+7. Visual QA against the 4 refs: black+glass (Stakent), uppercase display + pill nav (CheckBox), icon rail (nixtio), radial hero + soft cards (Financial) — all present, unified under Aurora.
+
+## Out of scope (this pass)
+Real FastAPI dashboard routes, Supabase auth/OAuth, AI Crew "explain" tab (Phase 7), finding bypass (Phase 9). Dashboard reads mock data behind a `USE_MOCK_DATA` flag so swapping to the live API later is a one-file change in `lib/api.ts`.
