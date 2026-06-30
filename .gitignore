@@ -49,3 +49,11 @@ out/
 
 # Local export/snapshot folder (a copy of the tracked tree, not source)
 GIT AI SLOP/
+
+# Internal / design / scratch — NOT part of the shipped product (never push)
+Dashboard Assets/
+CODEBASE_REVIEW_BRIEF.md
+PROMPT_improve_detection.md
+Dashbaord Design.md.txt
+CLAUDE.md
+Instructions.md
