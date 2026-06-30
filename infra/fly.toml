@@ -1,0 +1,20 @@
+# Fly.io deployment config
+# Placeholder — will be filled during Phase 0 (manual account setup)
+
+app = "ai-slop-quarantine-guard"
+
+[env]
+  ENVIRONMENT = "production"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8000
+  processes = ["api"]
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 5000
+  processes = ["worker"]
+
+[build]
+  dockerfile = "../api/Dockerfile"

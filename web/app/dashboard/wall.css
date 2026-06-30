@@ -1,0 +1,259 @@
+/*
+ * Command Wall — palette + helpers, SCOPED to the .wall-root wrapper only.
+ * Deliberately self-contained so the four Aurora pages are untouched. GMUNK-style
+ * deep-navy command-center: neon teal/magenta/violet on near-black, faint starfield.
+ * Semantic tokens (no raw hex in components). Severity reuses the global ramp.
+ */
+.wall-root,
+.wall-vars {
+  /* Surfaces */
+  --wall-bg: #04060c;
+  --wall-bg-deep: #02030a;
+  --wall-panel: rgba(12, 17, 28, 0.55);
+  --wall-panel-solid: #0a0e18;
+  --wall-line: rgba(120, 160, 255, 0.1);
+  --wall-line-strong: rgba(120, 160, 255, 0.2);
+
+  /* Neon accents */
+  --wall-cyan: #16e0e0;
+  --wall-blue: #3b82f6;
+  --wall-magenta: #ff3d8b;
+  --wall-violet: #8b5cf6;
+  --wall-green: #2de08a;
+
+  /* Action colors (Data Stream + globe). Always paired with a text label. */
+  --wall-act-created: #ff3d8b;
+  --wall-act-running: #16e0e0;
+  --wall-act-completed: #2de08a;
+  --wall-act-failed: #ff3b5c;
+
+  /* Severity ramp (mirrors global --sev-* for honesty consistency) */
+  --wall-sev-certain: #ff3b5c;
+  --wall-sev-high: #ff8a3d;
+  --wall-sev-medium: #ffc83d;
+  --wall-sev-clean: #2de08a;
+
+  /* Text (all >=4.5:1 primary / >=3:1 secondary on --wall-bg) */
+  --wall-text: #eaf0ff;
+  --wall-muted: #8a95ad;
+  --wall-faint: #525b71;
+
+  color: var(--wall-text);
+  font-feature-settings: 'tnum';
+}
+
+/* Layout-only props for the dashboard root (the overlay uses .wall-vars, which
+ * sets the variables WITHOUT position/overflow so its `fixed` is not overridden). */
+.wall-root {
+  position: relative;
+  min-height: 100dvh;
+  background:
+    radial-gradient(120% 90% at 50% 8%, #0a1024 0%, var(--wall-bg) 46%, var(--wall-bg-deep) 100%);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* Faint starfield — two tiled speck layers, cheap (no DOM nodes). */
+.wall-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(1px 1px at 70% 60%, rgba(255, 220, 180, 0.45), transparent),
+    radial-gradient(1px 1px at 40% 80%, rgba(180, 210, 255, 0.4), transparent),
+    radial-gradient(1.5px 1.5px at 85% 20%, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1px 1px at 12% 70%, rgba(255, 180, 120, 0.35), transparent);
+  background-size: 320px 320px, 420px 420px, 360px 360px, 500px 500px, 280px 280px;
+  opacity: 0.7;
+}
+
+/* Everything sits above the starfield. */
+.wall-root > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Regions are card-less + transparent — content floats on the one starfield
+ * (ditto the reference). No fills, borders, or blur. */
+.wall-panel {
+  position: relative;
+  background: transparent;
+}
+
+/* Section label — small uppercase, tracked. */
+.wall-label {
+  font-family: var(--font-display), sans-serif;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--wall-muted);
+}
+
+/* Big tabular number. */
+.wall-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+/* Hero figure — huge + THIN, like the reference numerals. */
+.wall-figure {
+  font-family: var(--font-sans), sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 200;
+  letter-spacing: -0.02em;
+  line-height: 0.92;
+  color: var(--wall-text);
+}
+
+/* Gradient fills for hero figures (clipped to text). */
+.wall-grad-pink,
+.wall-grad-cool,
+.wall-grad-warm {
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.wall-grad-pink { background-image: linear-gradient(180deg, #ff8fbf 0%, #ff2d7e 100%); }
+.wall-grad-cool { background-image: linear-gradient(110deg, #8b5cf6 0%, #16e0e0 100%); }
+.wall-grad-warm { background-image: linear-gradient(110deg, #ff8a3d 0%, #16e0e0 100%); }
+
+/* Faint hairline divider between bottom-strip regions. */
+.wall-divider {
+  border-color: var(--wall-line);
+}
+
+/* Clickable region affordance. */
+.wall-click {
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.wall-click:hover {
+  opacity: 0.92;
+}
+
+/* Top hairline gradient bar (decorative scanline). */
+.wall-hairline {
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--wall-magenta) 18%,
+    var(--wall-violet) 38%,
+    var(--wall-cyan) 60%,
+    var(--wall-green) 82%,
+    transparent 100%
+  );
+  opacity: 0.85;
+}
+
+/* Mono live-log line. */
+.wall-mono {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+/* Focus ring (keyboard) for wall controls. */
+.wall-focus:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--wall-cyan);
+  border-radius: 8px;
+}
+
+/* Soft neon glow utility (text). */
+.wall-glow-cyan { text-shadow: 0 0 18px rgba(22, 224, 224, 0.5); }
+.wall-glow-magenta { text-shadow: 0 0 18px rgba(255, 61, 139, 0.45); }
+
+/* Overlay surface card. */
+.wall-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--wall-line);
+  border-radius: 14px;
+}
+
+/* Themed text input. */
+.wall-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--wall-line-strong);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  color: var(--wall-text);
+  font-size: 0.9rem;
+  outline: none;
+}
+.wall-input::placeholder { color: var(--wall-faint); }
+.wall-input:focus { border-color: var(--wall-cyan); box-shadow: 0 0 0 1px var(--wall-cyan); }
+
+/* Source tab / chip button. */
+.wall-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 40px;
+  padding: 0.5rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--wall-line);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--wall-muted);
+  font-size: 0.85rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+.wall-tab:hover { color: var(--wall-text); }
+.wall-tab-on { border-color: var(--wall-line-strong); background: rgba(255, 255, 255, 0.06); color: var(--wall-text); }
+
+/* Primary / secondary CTA. */
+.wall-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 46px;
+  border-radius: 12px;
+  font-weight: 600;
+  color: #04060c;
+  background: linear-gradient(110deg, var(--wall-magenta), var(--wall-violet) 50%, var(--wall-cyan));
+  transition: filter 0.15s, opacity 0.15s;
+}
+.wall-cta:hover { filter: brightness(1.08); }
+.wall-cta:disabled { opacity: 0.7; cursor: default; }
+.wall-cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--wall-line-strong);
+  color: var(--wall-text);
+  background: transparent;
+  transition: background 0.15s;
+}
+.wall-cta-secondary:hover { background: rgba(255, 255, 255, 0.04); }
+
+/* Slim, on-theme scrollbar for the scrollable rail panels (Data Stream, Recent Scans). */
+.wall-scroll { scrollbar-width: thin; scrollbar-color: var(--wall-line-strong) transparent; }
+.wall-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.wall-scroll::-webkit-scrollbar-track { background: transparent; }
+.wall-scroll::-webkit-scrollbar-thumb { background: var(--wall-line-strong); border-radius: 9999px; }
+.wall-scroll:hover::-webkit-scrollbar-thumb { background: var(--wall-muted); }
+
+/* Honor reduced-motion inside the wall — kill decorative animation. */
+@media (prefers-reduced-motion: reduce) {
+  .wall-root *,
+  .wall-root *::before,
+  .wall-root *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

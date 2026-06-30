@@ -1,0 +1,136 @@
+"""Worker scan path (Stage 2): handle_scan_job ingests → analyzes → persists.
+
+Ingest is faked (no network/disk) so the assertions focus on the worker's
+orchestration + persistence: success completes with analytics, failures are recorded
+with a reason (never a silent drop), and the source dispatch is gated correctly.
+"""
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from app import store, worker
+from app.db.models import Base
+from app.ingest import IngestError
+
+
+@pytest_asyncio.fixture
+async def scan_store(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'worker.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(store, "async_session", factory)
+    yield
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_scan_job_completes_and_persists_findings(scan_store, monkeypatch):
+    scan_id = await store.create_scan("local", "/proj")
+    files = {"config.py": 'KEY = "AKIAIOSFODNN7REALKEY"\n# TODO: implement\nx = 1\n'}
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: (files, []))
+
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/proj"})
+
+    row = await store.get_scan(scan_id)
+    assert row["status"] == "completed"
+    assert row["files_scanned"] == 1
+    assert row["analytics"]["clean"] is False
+    rules = {f["rule_id"] for f in row["findings"]}
+    assert "SQG002" in rules  # secret
+    assert "SQG003" in rules  # placeholder
+    assert row["duration_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_scan_job_records_shadow_block_without_blocking(scan_store, monkeypatch):
+    """A CERTAIN secret (SQG002, in the default blocked set) WOULD block — the scan
+    records that in analytics + a scan.shadow_block audit row, but still completes."""
+    scan_id = await store.create_scan("local", "/proj")
+    files = {"config.py": 'KEY = "AKIAIOSFODNN7REALKEY"\nx = 1\n'}
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: (files, []))
+
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/proj"})
+
+    row = await store.get_scan(scan_id)
+    assert row["status"] == "completed"          # never blocked — shadow only
+    assert row["analytics"]["would_block"] == 1  # the SQG002 secret would block
+
+    actions = {a["action"] for a in await store.list_audit()}
+    assert "scan.shadow_block" in actions
+
+
+@pytest.mark.asyncio
+async def test_scan_job_clean_repo_completes_clean(scan_store, monkeypatch):
+    scan_id = await store.create_scan("local", "/clean")
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: ({"README.md": "# hi\n"}, []))
+
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/clean"})
+
+    row = await store.get_scan(scan_id)
+    assert row["status"] == "completed"
+    assert row["findings"] == []
+    assert row["analytics"]["clean"] is True
+
+
+@pytest.mark.asyncio
+async def test_scan_job_surfaces_skipped(scan_store, monkeypatch):
+    scan_id = await store.create_scan("local", "/big")
+    monkeypatch.setattr(
+        worker, "ingest_codebase", lambda s, r: ({"a.py": "x=1\n"}, ["huge.bin (too large)"])
+    )
+
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/big"})
+
+    row = await store.get_scan(scan_id)
+    assert row["files_skipped"] == 1
+    assert row["skipped"] == ["huge.bin (too large)"]
+
+
+@pytest.mark.asyncio
+async def test_scan_job_ingest_failure_recorded(scan_store, monkeypatch):
+    scan_id = await store.create_scan("url", "https://github.com/x/y")
+
+    def boom(_s, _r):
+        raise IngestError("clone timed out after 60s")
+
+    monkeypatch.setattr(worker, "ingest_codebase", boom)
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "url", "ref": "https://github.com/x/y"})
+
+    row = await store.get_scan(scan_id)
+    assert row["status"] == "failed"
+    assert "clone timed out" in row["error"]
+
+
+@pytest.mark.asyncio
+async def test_scan_job_unexpected_error_recorded(scan_store, monkeypatch):
+    scan_id = await store.create_scan("local", "/proj")
+
+    def boom(_s, _r):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(worker, "ingest_codebase", boom)
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/proj"})
+
+    row = await store.get_scan(scan_id)
+    assert row["status"] == "failed"
+    assert "kaboom" in row["error"]
+
+
+@pytest.mark.asyncio
+async def test_scan_job_missing_id_is_noop(scan_store):
+    # No scan_id → log and return, don't raise.
+    await worker.handle_scan_job({"source": "local", "ref": "/x"})
+
+
+def test_ingest_codebase_local_gated_in_production(monkeypatch):
+    monkeypatch.setattr(worker.settings, "environment", "production")
+    with pytest.raises(IngestError):
+        worker.ingest_codebase("local", "/some/path")
+
+
+def test_ingest_codebase_unknown_source():
+    with pytest.raises(IngestError):
+        worker.ingest_codebase("ftp", "ref")

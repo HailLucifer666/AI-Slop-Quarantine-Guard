@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-slop-quarantine-guard-api"
+version = "0.1.0"
+description = "AI Slop Quarantine Guard API — GitHub App for PR quality & security checks"
+requires-python = ">=3.12"
+authors = [{name = "Team", email = "team@example.com"}]
+
+dependencies = [
+    "fastapi>=0.104.1",
+    "uvicorn[standard]>=0.24.0",
+    "httpx>=0.25.0",
+    "sqlalchemy[asyncio]>=2.0.23",
+    "aiosqlite>=0.19.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.12.1",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "structlog>=23.2.0",
+    "arq>=0.25.0",
+    "redis>=5.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "PyJWT>=2.8.1",
+    "pathspec>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.3",
+    "pytest-asyncio>=0.21.1",
+    "ruff>=0.1.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

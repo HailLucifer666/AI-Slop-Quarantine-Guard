@@ -1,0 +1,48 @@
+"use client"
+
+import { formatNumber, shortRef } from "@/lib/format"
+import type { RecentTarget } from "@/lib/useWallData"
+import { Identicon } from "@/components/wall/Identicon"
+import { SEV_COLOR } from "@/components/wall/tokens"
+
+/**
+ * Recent scans — promoted from the buried bottom into the right rail so the scan
+ * history is always accessible. Each row opens the Findings overlay for that scan.
+ */
+export function RecentScans({ targets, onOpen }: { targets: RecentTarget[]; onOpen: (id: number) => void }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="wall-label">Recent Scans</div>
+      {targets.length === 0 ? (
+        <p className="mt-3 text-xs" style={{ color: "var(--wall-faint)" }}>
+          No scans yet — start one from the Scan tab.
+        </p>
+      ) : (
+        <ul
+          className="wall-scroll mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1"
+          style={{ maskImage: "linear-gradient(to bottom,#000 95%,transparent 100%)", WebkitMaskImage: "linear-gradient(to bottom,#000 95%,transparent 100%)" }}
+        >
+          {targets.map((t) => {
+            const color = SEV_COLOR[t.sev]
+            return (
+              <li key={t.id}>
+                <button onClick={() => onOpen(t.id)} className="wall-click wall-focus flex w-full items-center gap-2.5 rounded-md py-1.5 text-left">
+                  <Identicon seed={t.ref} size={22} />
+                  <span className="min-w-0 flex-1 truncate text-sm" style={{ color: "var(--wall-text)" }} title={t.ref}>
+                    {shortRef(t.ref)}
+                  </span>
+                  <span
+                    className="wall-num shrink-0 rounded px-1.5 py-0.5 text-[10px]"
+                    style={{ color: t.findings > 0 ? "#04060c" : "var(--wall-muted)", background: t.findings > 0 ? color : "var(--wall-line)" }}
+                  >
+                    {t.findings > 0 ? formatNumber(t.findings) : t.status === "completed" ? "clean" : t.status}
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,177 @@
+"use client"
+
+import { useState } from "react"
+import { Check, CheckCircle2, Copy, FileWarning } from "lucide-react"
+
+import { FindingCard } from "@/components/findings/FindingCard"
+import { Donut, RingGauge, type Segment } from "@/components/wall/charts/RadialCharts"
+import { CHECKS, CONFIDENCE_LABEL, CONFIDENCE_ORDER } from "@/lib/checks"
+import { buildFixPrompt } from "@/lib/exportFindings"
+import { formatDuration, formatNumber, shortRef } from "@/lib/format"
+import type { ScanDetail } from "@/lib/types"
+
+/** Per-rule accent colors (shared with the Activity Spectrum lanes). */
+const RULE_COLOR: Record<string, string> = {
+  SQG001: "#ff3d8b",
+  SQG002: "#ff3b5c",
+  SQG003: "#ffc83d",
+  SQG004: "#ff8a3d",
+  SQG005: "#8b5cf6",
+  SQG006: "#16e0e0",
+}
+const RULE_ORDER = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006"]
+
+// Cap how many finding cards mount per group at once. A 1500+-file scan can produce
+// thousands of findings; committing them all synchronously froze the page. Reveal
+// the rest on demand in chunks of this size.
+const RENDER_CAP = 100
+
+/**
+ * The scan result view — headline stats, radial charts (per-rule + severity +
+ * file coverage), a readable per-check strip, and the findings. Rendered inline
+ * on the scan page the moment analysis finishes, and on the analyses detail page.
+ * Every number derives from real analytics; nothing is invented.
+ */
+export function ScanResults({ scan }: { scan: ScanDetail }) {
+  const [copied, setCopied] = useState(false)
+  const [fallback, setFallback] = useState<string | null>(null)
+  const [limits, setLimits] = useState<Record<string, number>>({})
+  const a = scan.analytics
+
+  async function copyForAI() {
+    const text = buildFixPrompt(scan)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setFallback(text)
+    }
+  }
+
+  const advisory = a ? Math.max(0, a.total_findings - a.block_eligible) : 0
+  const grouped = CONFIDENCE_ORDER
+    .map((c) => ({ confidence: c, items: scan.findings.filter((f) => f.confidence === c) }))
+    .filter((g) => g.items.length > 0)
+
+  const ruleSegments: Segment[] = RULE_ORDER
+    .map((id) => ({ label: CHECKS[id]?.name ?? id, value: a?.by_rule?.[id] ?? 0, color: RULE_COLOR[id] }))
+  const sevSegments: Segment[] = [
+    { label: "Certain", value: a?.by_confidence?.CERTAIN ?? 0, color: "var(--wall-sev-certain)" },
+    { label: "High", value: a?.by_confidence?.HIGH ?? 0, color: "var(--wall-sev-high)" },
+    { label: "Medium", value: a?.by_confidence?.MEDIUM ?? 0, color: "var(--wall-sev-medium)" },
+  ]
+  const totalFiles = (a?.files_scanned ?? 0) + (a?.files_skipped ?? 0)
+
+  const TILES = a
+    ? [
+        { label: "Findings", value: a.total_findings, color: "var(--wall-text)" },
+        { label: "Block-eligible", value: a.block_eligible, color: a.block_eligible > 0 ? "var(--wall-act-failed)" : "var(--wall-sev-clean)" },
+        { label: "Advisory", value: advisory, color: "var(--wall-sev-medium)" },
+        { label: "Files scanned", value: a.files_scanned, color: "var(--wall-text)" },
+      ]
+    : []
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-mono text-sm" style={{ color: "var(--wall-text)" }}>{shortRef(scan.ref)}</div>
+          <div className="text-xs" style={{ color: "var(--wall-faint)" }}>{scan.source} · scan #{scan.id} · {scan.status} · {formatDuration(scan.duration_ms)}</div>
+        </div>
+        {scan.findings.length > 0 && (
+          <button
+            onClick={copyForAI}
+            title="Copies every finding as a structured prompt — paste into your AI to fix them all at once."
+            className="wall-cta-secondary inline-flex w-auto items-center gap-2 text-sm"
+          >
+            {copied ? <><Check className="h-4 w-4" aria-hidden /> Copied</> : <><Copy className="h-4 w-4" aria-hidden /> Copy for AI</>}
+          </button>
+        )}
+      </div>
+
+      {fallback && (
+        <div className="space-y-2 rounded-md p-3" style={{ border: "1px solid var(--wall-line)" }}>
+          <p className="text-xs" style={{ color: "var(--wall-muted)" }}>Clipboard was blocked — select all (Ctrl/Cmd-A) inside the box and copy manually.</p>
+          <textarea readOnly value={fallback} onFocus={(e) => e.currentTarget.select()} autoFocus className="h-48 w-full resize-y rounded bg-transparent p-2 font-mono text-xs" style={{ color: "var(--wall-text)", border: "1px solid var(--wall-line)" }} />
+        </div>
+      )}
+
+      {/* Headline stat tiles — large + readable */}
+      {a && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {TILES.map((t) => (
+            <div key={t.label} className="wall-card flex flex-col gap-1 p-4">
+              <div className="text-xs uppercase tracking-wide" style={{ color: "var(--wall-faint)" }}>{t.label}</div>
+              <div className="wall-num text-4xl leading-none" style={{ color: t.color }}>{formatNumber(t.value)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Radial charts */}
+      {a && (
+        <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-3">
+          <Donut title="By check" segments={ruleSegments} centerSub="findings" />
+          <Donut title="By severity" segments={sevSegments} centerSub="findings" />
+          <RingGauge title="File coverage" value={a.files_scanned} max={totalFiles} color="var(--wall-cyan)" centerSub={`of ${formatNumber(totalFiles)}`} />
+        </div>
+      )}
+
+      {/* Per-check strip — all 6 analyzers, what each found (0 = clean) */}
+      {a && (
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+          {RULE_ORDER.map((id) => {
+            const count = a.by_rule?.[id] ?? 0
+            return (
+              <div key={id} className="flex items-center justify-between gap-3 rounded-lg p-3" style={{ border: "1px solid var(--wall-line)", background: "var(--wall-bg-deep)" }}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: count > 0 ? RULE_COLOR[id] : "var(--wall-sev-clean)", boxShadow: count > 0 ? `0 0 8px ${RULE_COLOR[id]}` : "none" }} aria-hidden />
+                  <span className="truncate text-sm" style={{ color: "var(--wall-text)" }}>{CHECKS[id]?.name ?? id}</span>
+                </span>
+                <span className="wall-num text-lg" style={{ color: count > 0 ? "var(--wall-text)" : "var(--wall-faint)" }}>{count}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {scan.files_skipped > 0 && (
+        <div className="flex items-start gap-2 rounded-md p-3 text-sm" style={{ color: "var(--wall-muted)", background: "rgba(255,200,61,0.06)", border: "1px solid rgba(255,200,61,0.2)" }}>
+          <FileWarning className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--wall-sev-medium)" }} aria-hidden />
+          <span>{scan.files_skipped} file(s) skipped (size/type caps) — not analyzed, so some findings may be missing. We never pretend to have checked what we didn&apos;t.</span>
+        </div>
+      )}
+
+      {scan.status === "completed" && a?.clean && (
+        <div className="flex flex-col items-center gap-3 rounded-xl p-10 text-center" style={{ border: "1px solid var(--wall-line)" }}>
+          <CheckCircle2 className="h-10 w-10" style={{ color: "var(--wall-sev-clean)" }} aria-hidden />
+          <h2 className="font-display text-xl font-bold" style={{ color: "var(--wall-text)" }}>All clear</h2>
+          <p className="text-sm" style={{ color: "var(--wall-muted)" }}>Every check ran. Nothing to flag.</p>
+        </div>
+      )}
+
+      {grouped.map((g) => {
+        const limit = limits[g.confidence] ?? RENDER_CAP
+        const remaining = g.items.length - limit
+        return (
+          <section key={g.confidence} className="space-y-3">
+            <h3 className="wall-label">
+              {g.confidence} <span style={{ color: "var(--wall-faint)" }}>· {CONFIDENCE_LABEL[g.confidence]} ({g.items.length})</span>
+            </h3>
+            {g.items.slice(0, limit).map((f, i) => <FindingCard key={`${g.confidence}-${i}`} finding={f} />)}
+            {remaining > 0 && (
+              <button
+                onClick={() => setLimits((p) => ({ ...p, [g.confidence]: limit + RENDER_CAP }))}
+                className="wall-cta-secondary inline-flex w-auto items-center gap-2 text-sm"
+              >
+                Show {Math.min(remaining, RENDER_CAP)} more · {remaining} hidden
+              </button>
+            )}
+          </section>
+        )
+      })}
+    </div>
+  )
+}
