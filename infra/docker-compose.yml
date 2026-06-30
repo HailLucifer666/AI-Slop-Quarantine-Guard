@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -50,6 +48,19 @@ services:
       - redis
     volumes:
       - ../api:/app
+
+  web:
+    build:
+      context: ../web
+      args:
+        # Baked into the client bundle at build time. The browser runs on the
+        # host, so it reaches the API via the host-mapped port, not the compose
+        # service name.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:

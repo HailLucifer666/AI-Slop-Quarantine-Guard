@@ -83,16 +83,24 @@ either miss the AI-specific failures or cry wolf so often you stop listening.
 
 ## Quick start
 
-**Prerequisites:** Python 3.12+, Node 20+, and a Redis instance (local, Docker, or a free cloud URL). Docker optional.
+### ▶ One command (Docker — recommended)
 
-### Option A — Docker backend + npm frontend (easiest)
-```bash
-cd infra && docker compose up          # API :8000, worker, redis, postgres
-# in another terminal:
-cd web && npm install && npm run dev    # dashboard :3000
-```
+The whole stack — dashboard, API, worker, Redis, and Postgres — runs from a single command. **Docker is the only thing you need to install.**
 
-### Option B — manual
+1. **Install Docker Desktop** (free): https://www.docker.com/products/docker-desktop/ — then launch it once so the engine is running.
+2. Get the code and start it:
+   ```bash
+   git clone https://github.com/HailLucifer666/AI-Slop-Quarantine-Guard.git
+   cd AI-Slop-Quarantine-Guard/infra
+   docker compose up
+   ```
+3. Open **http://localhost:3000**.
+
+That's it — Docker builds and runs everything (Python, Node, Redis, Postgres) in containers; you don't install any of them yourself. First build takes a few minutes; later starts are fast. Stop with `Ctrl+C` (or `docker compose down`).
+
+### Option B — manual (for local development)
+
+**Prerequisites:** Python 3.12+, Node 20+, and a Redis instance.
 ```bash
 cp .env.example .env                    # defaults are fine for local (SQLite, no keys needed)
 # start a Redis: `docker run -p 6379:6379 redis:7-alpine`  (or set REDIS_URL to a cloud URL)
