@@ -6,6 +6,7 @@ Minimal real implementation for JSON logging + correlation ID.
 import structlog
 import uuid
 from contextvars import ContextVar
+from typing import Optional
 
 
 # Correlation ID context variable

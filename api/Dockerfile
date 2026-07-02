@@ -6,9 +6,10 @@ FROM python:3.12-slim AS builder
 WORKDIR /build
 
 COPY pyproject.toml pyproject.toml
+COPY ./app ./app
 
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir .
 
 # Final stage: distroless
 FROM python:3.12-slim

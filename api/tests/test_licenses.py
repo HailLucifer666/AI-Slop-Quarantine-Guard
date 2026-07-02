@@ -1,6 +1,5 @@
 """SQG005 license scanner: advisory on copyleft deps, fail-safe, only PR-introduced deps."""
 
-import re
 
 import pytest
 

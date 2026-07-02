@@ -4,7 +4,6 @@ The worker consumes both the webhook queue (PR deliveries) and the scan queue.
 """
 
 import json
-from typing import Any
 
 import redis.asyncio as aioredis
 
