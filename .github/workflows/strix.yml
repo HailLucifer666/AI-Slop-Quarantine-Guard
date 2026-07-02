@@ -1,0 +1,36 @@
+name: Strix AI Pentest (advisory)
+
+# Independent of the Guard's deterministic Check-Run gate (see ci.yml / api/app).
+# Strix is an LLM-driven autonomous pentest agent — its findings are NOT reproducible
+# facts and must never feed api/app/analyzers or checks.py. This job is advisory-only
+# and never blocks the PR (continue-on-error).
+
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch: {}
+
+jobs:
+  strix-scan:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Strix
+        run: pipx install strix-agent==1.0.4
+
+      - name: Run Strix (non-interactive)
+        env:
+          STRIX_LLM: ${{ vars.STRIX_LLM || 'openai/minimaxai/minimax-m3' }}
+          LLM_API_BASE: ${{ vars.LLM_API_BASE || 'https://integrate.api.nvidia.com/v1' }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: strix -n --target . --output strix_runs
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strix-findings
+          path: strix_runs/
+          retention-days: 14
