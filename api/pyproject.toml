@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "ai-slop-quarantine-guard-api"
 version = "0.1.0"
 description = "AI Slop Quarantine Guard API — GitHub App for PR quality & security checks"
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 authors = [{name = "Team", email = "team@example.com"}]
 
 dependencies = [
@@ -40,4 +40,4 @@ packages = ["app"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py39"
