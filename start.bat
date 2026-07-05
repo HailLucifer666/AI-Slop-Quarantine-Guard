@@ -290,8 +290,9 @@ echo  ==============================================================
 echo.
 
 REM Rebuild PATH/PYTHONPATH with correct PIP_TARGET (stamp may have overridden it)
+REM Include api dir here so child processes inherit it — avoids && in wt args
 set PATH=%PIP_TARGET%\bin;%PIP_TARGET%;%NPM_PREFIX%\bin;%PATH%
-set PYTHONPATH=%PIP_TARGET%;%PYTHONPATH%
+set PYTHONPATH=%PIP_TARGET%;%~dp0api;%PYTHONPATH%
 
 REM ---------------------------------------------------------------
 REM  Free ports
@@ -301,9 +302,8 @@ powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -LocalPort 30
 
 REM ---------------------------------------------------------------
 REM  Build env vars for child processes
-REM  PYTHONPATH must include our package target so imports resolve
+REM  PYTHONPATH is inherited from this process — no inline set needed
 REM ---------------------------------------------------------------
-set CHILD_PYPATH=%PIP_TARGET%;%~dp0api
 set CHILD_PYTHON=!PYTHON_CMD!
 
 echo   Launching stack...
@@ -312,14 +312,16 @@ echo.
 where wt >nul 2>&1
 if errorlevel 1 goto fallback
 
-REM One Windows Terminal window, three panes.
-wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "npm run dev" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "set PYTHONPATH=%CHILD_PYPATH%&&!CHILD_PYTHON! -m uvicorn app.main:app --host 127.0.0.1 --port 8000" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "set PYTHONPATH=%CHILD_PYPATH%&&!CHILD_PYTHON! -m app.worker"
+REM One Windows Terminal window — three split panes, no separate tabs.
+REM new-tab opens the first pane; split-pane -V divides left/right;
+REM split-pane -H then divides the right pane top/bottom.
+wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "npm run dev" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "!CHILD_PYTHON! -m uvicorn app.main:app --host 127.0.0.1 --port 8000" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "!CHILD_PYTHON! -m app.worker"
 goto open
 
 :fallback
 REM Windows Terminal not found - fall back to 3 separate windows.
-start "SQG API"    /D "%~dp0api" cmd /k "set PYTHONPATH=%CHILD_PYPATH%&&!CHILD_PYTHON! -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
-start "SQG Worker" /D "%~dp0api" cmd /k "set PYTHONPATH=%CHILD_PYPATH%&&!CHILD_PYTHON! -m app.worker"
+start "SQG API"    /D "%~dp0api" cmd /k "!CHILD_PYTHON! -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
+start "SQG Worker" /D "%~dp0api" cmd /k "!CHILD_PYTHON! -m app.worker"
 start "SQG Web"    /D "%~dp0web" cmd /k "npm run dev"
 
 :open
