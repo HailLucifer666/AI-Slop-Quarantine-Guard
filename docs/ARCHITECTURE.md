@@ -299,7 +299,14 @@ These are hard targets, tested in CI on every code change. Exceeded → degrade 
 - **Never use `neutral`** — it renders as a green checkmark and makes findings invisible.
 - Summary is truncated to fit GitHub's character limit: top-N findings + "X more findings — see dashboard."
 - PR review comments are posted for the top findings, anchored to the exact line.
-- **Reconciliation task:** any Check Run still `in_progress` after 5 minutes is automatically closed as `action_required` with message "analysis timed out." No orphaned spinners.
+- **Reconciliation task:** implemented for **whole-repo scans** — a running scan holds a
+  5-minute heartbeat lease (`store.STALE_LEASE_SECONDS`), renewed every 20s by the worker;
+  both the worker at startup and the API every 60s fail any scan whose lease lapsed, with an
+  honest reason. This exists because a stuck `running` row left the *previous* completed scan
+  rendering as the current result.
+  **Not yet implemented for PR Check Runs:** a Check Run left `in_progress` by a worker that
+  died mid-analysis is still not auto-closed. (`worker.analyze_pr` does resolve the Check Run
+  when analysis raises, so only a hard process death leaves a spinner.)
 - **Rate budget:** GitHub Checks API allows 1,000 updates per hour per repo. The system does not double-update; one transition from `in_progress` to final state.
 
 ---
@@ -360,12 +367,21 @@ Code Workspace/
 │       ├── analyzers/
 │       │   ├── base.py          # Finding model + Analyzer protocol + try/except wrapper
 │       │   ├── dependencies.py  # SQG001: registry existence + fail-safe + workspace whitelist
-│       │   ├── secrets.py       # SQG002: gitleaks runner + path allowlist
-│       │   ├── placeholders.py  # SQG003: regex + tree-sitter AST
-│       │   ├── vulns.py         # SQG004: trivy / osv-scanner
-│       │   ├── licenses.py      # SQG005: license check
-│       │   └── sast.py          # Semgrep runner (P0/P1 rules only)
-│       ├── checks.py            # GitHub Checks API output (truncation-safe)
+│       │   ├── secrets.py       # SQG002: in-process regex + format validation + path allowlist
+│       │   ├── placeholders.py  # SQG003: regex (tree-sitter AST not yet used)
+│       │   ├── vulns.py         # SQG004: OSV.dev HTTP API (no trivy/osv-scanner binary)
+│       │   ├── licenses.py      # SQG005: registry license metadata (pypi + npm)
+│       │   ├── sast.py          # SQG006: regex sink detector, Python + JS/TS only
+│       │   ├── typosquat.py     # SQG007: edit distance vs curated popular-package list
+│       │   └── popular_packages.py # curated list backing SQG007
+│       ├── checks.py            # Check-Run output + coverage table + review comments
+│       ├── coverage.py          # per-rule coverage: ran / partial / not-run + why
+│       ├── grouping.py          # cluster related findings so volume can't bury severity
+│       ├── engines.py           # probe external scanners; report which are missing
+│       ├── cli_scan.py          # `python -m app.cli_scan <path>` — scan with no Redis/DB
+│       ├── health_router.py     # GET /api/health readiness (db path, redis, worker, engines)
+│       ├── scan.py              # whole-repo orchestrator (synthetic all-added diff)
+│       ├── ingest.py            # clone / zip / walk → {path: content} + caps + provenance
 │       ├── crew/                # Phase 7: AI explainer — prompts, router, caching
 │       ├── db/                  # SQLAlchemy 2.0 models + Alembic migrations
 │       ├── observability.py     # structlog + OTel + correlation-id

@@ -58,15 +58,22 @@
 
 ## The Guard — Checkers (Deterministic Analyzers)
 
-| Check | Tool(s) | Version | Why |
-|---|---|---|---|
-| **Fake/hallucinated package** | Custom `registry_client` + `requests` / `httpx` | PyPI JSON API, npm registry, crates.io, Go proxy | Direct registry hits; no extra tool; proven accurate. |
-| **Leaked secrets** | **gitleaks** + **trufflehog** (optional verification) | gitleaks 8.18+, trufflehog 3.63+ | gitleaks = fast, extensive patterns; TruffleHog = entropy + optional live verify. Ship v1 with offline patterns only. |
-| **Security vulnerabilities (SAST)** | **Semgrep** | 1.45+ | OSS, rule-based, P0/P1 only (high signal). Via `semgrep-cli`. |
-| **Known-vulnerable dependencies** | **Trivy** + **OSV-Scanner** | trivy 0.48+, osv-scanner 1.6+ | Trivy = comprehensive, fast; OSV = Google-backed vulnerability database. Run both, aggregate results. |
-| **Risky/incompatible licenses** | **Trivy** + **Syft** | trivy 0.48+, syft 0.73+ | Trivy includes license scanning; Syft = detailed SBOM. |
-| **Placeholder code** | **tree-sitter** + regex | tree-sitter-python 0.20+, tree-sitter-javascript 0.20+ | AST parsing for context-aware detection; regex as fallback. |
-| **AI reasoning scratchpads** | Regex (text/markdown only) | — | Simple pattern match for `<thinking>`, `<plan>`, etc. Only flag in `.md`, `.txt` files (low FP). |
+> **Status:** the **Selected** column is the intended stack. **Shipping today** is what the
+> code actually does. `api/pyproject.toml` declares no security-scanning dependency, and no
+> external scanner binary is invoked anywhere in `api/`. `api/app/engines.py` probes for
+> them and reports which are missing; a check backed only by the in-process fallback says so
+> in the scan's coverage record rather than presenting itself as the tool named here.
+
+| Check | Shipping today | Selected (intended) | Version | Why |
+|---|---|---|---|---|
+| **Fake/hallucinated package** | ✅ as selected | Custom `registry_client` + `httpx` | PyPI JSON API, npm registry, crates.io | Direct registry hits; no extra tool; proven accurate. |
+| **Leaked secrets** | ⚠️ in-process regex + format validation | **gitleaks** + **trufflehog** (optional verification) | gitleaks 8.18+, trufflehog 3.63+ | gitleaks = fast, extensive patterns; TruffleHog = entropy + optional live verify. Ship v1 with offline patterns only. |
+| **Security vulnerabilities (SAST)** | ⚠️ in-process regex, **Python + JS/TS only** | **Semgrep** | 1.45+ | OSS, rule-based, P0/P1 only (high signal). Via `semgrep-cli`. |
+| **Known-vulnerable dependencies** | ⚠️ OSV.dev HTTP API only (no Trivy) | **Trivy** + **OSV-Scanner** | trivy 0.48+, osv-scanner 1.6+ | Trivy = comprehensive, fast; OSV = Google-backed vulnerability database. Run both, aggregate results. |
+| **Risky/incompatible licenses** | ⚠️ registry license metadata, pypi + npm only | **Trivy** + **Syft** | trivy 0.48+, syft 0.73+ | Trivy includes license scanning; Syft = detailed SBOM. |
+| **Placeholder code** | ⚠️ regex only (no AST) | **tree-sitter** + regex | tree-sitter-python 0.20+, tree-sitter-javascript 0.20+ | AST parsing for context-aware detection; regex as fallback. |
+| **Typosquatted package (SQG007)** | ✅ edit distance vs curated list | same | — | Advisory only; a suspicion about intent, never a provable fact. |
+| **AI reasoning scratchpads (SQG008)** | ❌ not implemented | Regex (text/markdown only) | — | Specified, never built. See CHECKS_CATALOG.md. |
 
 ---
 

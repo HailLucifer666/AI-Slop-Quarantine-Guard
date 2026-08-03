@@ -255,7 +255,8 @@ Build order within this phase:
 4. **SQG005 — license check**
 5. **SQG006 — outdated dependency**
 6. **SQG003 — placeholder code**
-7. **SQG007 — AI scratchpad** (off by default)
+7. **SQG007 — typosquatted package name** (always on, advisory only). The AI-scratchpad
+   detector this number used to name is unimplemented and re-numbered SQG008.
 
 ### SQG001 — Fake Package Checker
 
@@ -269,7 +270,7 @@ Build order within this phase:
 
 ### SQG002 — Secret Scanner
 
-**What it does:** Runs gitleaks on the diff. Maps hits to lines added in this PR (not lines from history).
+**What it does (today):** runs a curated in-process pattern set with format validation over the diff — **not** gitleaks, which is not installed or invoked. Hits are mapped to lines added in this PR, never lines from history. Wrapping gitleaks is planned; until then the scan's coverage record states that this check ran on the built-in matcher only.
 
 **False-positive controls:**
 - Path allowlist: `*.example`, `test/`, `fixtures/`, `*.md` (documentation examples)
@@ -278,7 +279,7 @@ Build order within this phase:
 
 ### SQG004 — CVE Scanner
 
-**What it does:** Runs Trivy and/or OSV-Scanner against the resolved dependency tree for known CVEs (published security vulnerabilities).
+**What it does (today):** queries the OSV.dev HTTP API in batches for exactly-pinned dependencies. Trivy and osv-scanner are **not** installed or invoked, so ecosystems whose manifests the in-process parsers can't read (Go modules, Maven, Gradle, Bundler, Composer, NuGet) are reported as not covered rather than as clean.
 
 **Confidence:** HIGH. The match to the CVE database is factual; whether your specific code is exploitable requires deeper analysis we don't do yet. Therefore CVEs are advisory, not block-eligible.
 
