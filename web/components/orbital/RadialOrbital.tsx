@@ -1,14 +1,14 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Bug, FileCode2, KeyRound, Package, Scale, ShieldAlert, type LucideIcon } from "lucide-react"
+import { Bug, FileCode2, Fingerprint, KeyRound, Package, Scale, Scissors, ShieldAlert, type LucideIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { CHECKS } from "@/lib/checks"
+import { CHECKS, RULE_IDS } from "@/lib/checks"
 
 /**
- * The 6 SQG checks as an orbiting constellation (adapted from the Radial Orbital
+ * Every registered SQG check as an orbiting constellation (adapted from the Radial Orbital
  * Timeline snippet). A node "fires" when its rule has findings (warm glow);
  * clean checks stay cool. Click a node to read what it detects + sibling checks.
  * Auto-rotation pauses under reduced-motion (nodes fall into a static ring).
@@ -32,14 +32,16 @@ const ICONS: Record<string, LucideIcon> = {
   SQG004: ShieldAlert,
   SQG005: Scale,
   SQG006: Bug,
+  SQG007: Fingerprint,
+  SQG009: Scissors,
 }
 // Sibling groups (same risk family) — drives the "connected checks" links.
 const GROUPS: string[][] = [
-  ["SQG001", "SQG004", "SQG005"], // supply chain
+  ["SQG001", "SQG004", "SQG005", "SQG007"], // supply chain
   ["SQG002"], // secrets
-  ["SQG003", "SQG006"], // code quality / safety
+  ["SQG003", "SQG006", "SQG009"], // code quality / safety
 ]
-const RULES = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006"]
+const RULES = RULE_IDS
 
 function relatedOf(id: string): string[] {
   const g = GROUPS.find((grp) => grp.includes(id)) ?? []

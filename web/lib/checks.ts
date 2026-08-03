@@ -21,7 +21,20 @@ export const CHECKS: Record<string, CheckMeta> = {
   SQG005: { id: "SQG005", name: "Risky license", blurb: "A dependency whose license may conflict with your project.", blockEligible: false, severity: "high" },
   SQG006: { id: "SQG006", name: "Security issue", blurb: "A potentially dangerous code pattern flagged by static analysis.", blockEligible: false, severity: "high" },
   SQG007: { id: "SQG007", name: "Possible typosquat", blurb: "A dependency whose name closely resembles a popular package — verify it's the one you meant. Advisory only.", blockEligible: false, severity: "medium" },
+  // SQG008 is specified but not built, so it is deliberately absent rather than shown
+  // as a check that always finds nothing.
+  SQG009: { id: "SQG009", name: "Longer than it needs to be", blurb: "Several lines of code that one equivalent line replaces. Each finding shows the shorter version, worked out from the code itself. Python only, advisory.", blockEligible: false, severity: "medium" },
 }
+
+/**
+ * Every implemented rule, in display order — the ONE list the UI iterates.
+ *
+ * Six components used to hardcode their own `["SQG001" … "SQG006"]`, so adding SQG007
+ * left typosquat findings counted by the backend and invisible in every chart. Deriving
+ * from CHECKS means a new rule appears everywhere the moment it is registered above,
+ * instead of silently vanishing from whichever list nobody remembered to update.
+ */
+export const RULE_IDS: string[] = Object.keys(CHECKS)
 
 export function checkName(ruleId: string): string {
   return CHECKS[ruleId]?.name ?? ruleId

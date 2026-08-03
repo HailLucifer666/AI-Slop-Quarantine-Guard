@@ -6,7 +6,10 @@
 export type Confidence = "CERTAIN" | "HIGH" | "MEDIUM"
 export type ScanStatus = "queued" | "running" | "completed" | "failed"
 export type ScanSource = "url" | "zip" | "local"
-export type RuleId = "SQG001" | "SQG002" | "SQG003" | "SQG004" | "SQG005" | "SQG006" | "SQG007"
+// SQG008 is specified but not implemented, so it is absent by design.
+export type RuleId =
+  | "SQG001" | "SQG002" | "SQG003" | "SQG004"
+  | "SQG005" | "SQG006" | "SQG007" | "SQG009"
 
 export interface Evidence {
   snippet: string
@@ -136,7 +139,7 @@ export interface TopFile {
 export interface Analytics {
   total_findings: number
   by_confidence: Record<string, number> // CERTAIN / HIGH / MEDIUM
-  by_rule: Record<string, number> // SQG001..SQG006 -> count
+  by_rule: Record<string, number> // rule id -> count (see lib/checks RULE_IDS)
   block_eligible: number
   top_files: TopFile[]
   files_scanned: number

@@ -23,8 +23,9 @@ const RULE_COLOR: Record<string, string> = {
   // SQG007 was missing here, so typosquat findings were counted by the backend but
   // never appeared in the per-check strip or the "By check" donut.
   SQG007: "#4d7cff",
+  SQG009: "#5ef08a",
 }
-const RULE_ORDER = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007"]
+const RULE_ORDER = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007", "SQG009"]
 
 // Cap how many finding cards mount per group at once. A 1500+-file scan can produce
 // thousands of findings; committing them all synchronously froze the page. Reveal

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react"
 
-import { CHECKS } from "@/lib/checks"
+import { CHECKS, RULE_IDS } from "@/lib/checks"
 import { useReducedMotion } from "@/components/wall/useReducedMotion"
 
 /**
@@ -11,14 +11,16 @@ import { useReducedMotion } from "@/components/wall/useReducedMotion"
  * real per-rule finding load on completion. Canvas + rAF, DPR-aware, reduced-
  * motion → static. Never fakes progress: `active` = the real running status.
  */
-const LANES: { id: string; color: string }[] = [
-  { id: "SQG001", color: "#ff3d8b" },
-  { id: "SQG002", color: "#ff3b5c" },
-  { id: "SQG003", color: "#ffc83d" },
-  { id: "SQG004", color: "#ff8a3d" },
-  { id: "SQG005", color: "#8b5cf6" },
-  { id: "SQG006", color: "#16e0e0" },
-]
+// One lane per registered check, colours matching the scan-result strip. Derived from
+// RULE_IDS so a new rule gets a lane rather than being dropped from the display.
+const LANE_COLOR: Record<string, string> = {
+  SQG001: "#ff3d8b", SQG002: "#ff3b5c", SQG003: "#ffc83d", SQG004: "#ff8a3d",
+  SQG005: "#8b5cf6", SQG006: "#16e0e0", SQG007: "#4d7cff", SQG009: "#5ef08a",
+}
+const LANES: { id: string; color: string }[] = RULE_IDS.map((id) => ({
+  id,
+  color: LANE_COLOR[id] ?? "#5b6472",
+}))
 
 function noise(n: number): number {
   return Math.abs(Math.sin(n * 12.9898) * 43758.5453) % 1

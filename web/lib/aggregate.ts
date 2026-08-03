@@ -8,7 +8,7 @@ export interface Overview {
   certainTotal: number
   findingsTotal: number
   avgMs: number | null
-  byRule: Record<string, number> // SQG001..006 -> count
+  byRule: Record<string, number> // rule id -> count (see lib/checks RULE_IDS)
   topFiles: { file_path: string; count: number }[]
 }
 

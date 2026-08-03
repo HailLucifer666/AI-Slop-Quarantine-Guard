@@ -10,7 +10,7 @@ import { ShieldCheck } from "lucide-react"
 const FallingDotMatrix = dynamic(() => import("@/components/effects/FallingDotMatrix"), { ssr: false })
 
 const BOOT_LINES = [
-  "loading analyzers · SQG001–006",
+  "loading analyzers · SQG001–009",
   "linking deterministic Guard core",
   "connecting scan engine · :8000",
   "rendering Command Wall",
