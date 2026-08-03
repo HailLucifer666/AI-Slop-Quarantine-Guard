@@ -1,6 +1,23 @@
-"""SQLAlchemy 2.0 declarative models.
+"""SQLAlchemy 2.0 declarative models — eight tables, three of them unused.
 
-ponytail: stub columns, minimal schema.
+No longer the "stub columns, minimal schema" this docstring used to claim: ``Scan`` alone
+carries the progress, lease, coverage, grouping and ingest-provenance columns the scanner
+depends on.
+
+What a reader needs to know before trusting the shape of this file — verified against the
+live ``api/app.db``, which holds 19 scans:
+
+* ``Scan``, ``AppSettings``, ``AuditLog`` and ``WorkerHeartbeat`` are live.
+* ``Analysis`` and ``Finding`` are **empty (0 rows) and written by nothing.** A completed
+  scan's findings are stored as a JSON blob on the ``scans`` row, not normalised into
+  these tables. They describe an intended schema, not the one in use — do not read
+  ``findings`` expecting to see results. ``docs/DATA_MODEL.md`` carries the same warning.
+* ``Installation`` and ``WebhookDelivery`` are also empty, because no GitHub App
+  installation has ever been recorded against this database.
+
+New columns are added by the append-only ``_ADDED_COLUMNS`` tuple in ``session.py``, not
+by Alembic — ``alembic.ini`` exists but has no ``versions/``. That is a deliberate
+deviation for a single-node SQLite MVP and a debt to settle before Postgres.
 """
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean

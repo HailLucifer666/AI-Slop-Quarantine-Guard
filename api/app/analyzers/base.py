@@ -1,6 +1,13 @@
-"""Finding model and Analyzer protocol (real impl, universal currency).
+"""The Finding record — the one currency every check reports in.
 
-ponytail: Finding is REAL, Analyzer protocol is stub signatures only.
+``Finding`` carries everything a report needs about a single result: where it is, how
+confident we are, whether it may block, the advisories behind it, a remediation, and the
+provenance (which analyzer and engine version produced it) that lets a reader re-check
+the claim rather than trust it. ``finalize`` stamps the fingerprint and evidence hash on
+the way out so no rule can forget to.
+
+The ``Analyzer`` protocol at the bottom of this file describes a shape nothing in the
+codebase actually uses — see the note on the class itself.
 """
 
 import hashlib
@@ -154,9 +161,19 @@ def finalize(findings: List["Finding"]) -> List["Finding"]:
 
 
 class Analyzer(Protocol):
-    """Analyzer protocol (stub signatures).
+    """A shape no analyzer implements — kept as a record of an intent, not a contract.
 
-    ponytail: stub, implemented in Phase 3
+    This used to be annotated "implemented in Phase 3". Phase 3 shipped and took a
+    different route: all eight checks are module-level async functions with the signature
+    ``check_x(diff, repo_context) -> List[Finding]`` (see ``dependencies.py`` and its
+    siblings), collected by the explicit list in ``scan.py::run_scan`` rather than by any
+    class implementing ``analyze``. Nothing type-checks against this protocol and nothing
+    satisfies it.
+
+    Left in place rather than deleted because removing it is a separate call from
+    correcting the comment that misdescribed it. If the function signature is the intended
+    contract, this belongs in the bin; if a plugin interface is still wanted, this needs
+    rewriting around the signature the analyzers actually have.
     """
 
     async def analyze(self, diff: str, repo_context: dict) -> List[Finding]:
