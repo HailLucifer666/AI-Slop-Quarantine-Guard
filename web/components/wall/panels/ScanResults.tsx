@@ -1,9 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import { Check, CheckCircle2, Copy, FileWarning } from "lucide-react"
+import { AlertTriangle, Check, CheckCircle2, Copy, FileWarning } from "lucide-react"
 
+import { CoveragePanel } from "@/components/findings/CoveragePanel"
 import { FindingCard } from "@/components/findings/FindingCard"
+import { GroupedFindings } from "@/components/findings/GroupedFindings"
 import { Donut, RingGauge, type Segment } from "@/components/wall/charts/RadialCharts"
 import { CHECKS, CONFIDENCE_LABEL, CONFIDENCE_ORDER } from "@/lib/checks"
 import { buildFixPrompt } from "@/lib/exportFindings"
@@ -18,8 +20,11 @@ const RULE_COLOR: Record<string, string> = {
   SQG004: "#ff8a3d",
   SQG005: "#8b5cf6",
   SQG006: "#16e0e0",
+  // SQG007 was missing here, so typosquat findings were counted by the backend but
+  // never appeared in the per-check strip or the "By check" donut.
+  SQG007: "#4d7cff",
 }
-const RULE_ORDER = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006"]
+const RULE_ORDER = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007"]
 
 // Cap how many finding cards mount per group at once. A 1500+-file scan can produce
 // thousands of findings; committing them all synchronously froze the page. Reveal
@@ -144,15 +149,37 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
         </div>
       )}
 
-      {scan.status === "completed" && a?.clean && (
-        <div className="flex flex-col items-center gap-3 rounded-xl p-10 text-center" style={{ border: "1px solid var(--wall-line)" }}>
-          <CheckCircle2 className="h-10 w-10" style={{ color: "var(--wall-sev-clean)" }} aria-hidden />
-          <h2 className="font-display text-xl font-bold" style={{ color: "var(--wall-text)" }}>All clear</h2>
-          <p className="text-sm" style={{ color: "var(--wall-muted)" }}>Every check ran. Nothing to flag.</p>
-        </div>
+      {/* Verdict. "All clear" requires that every check actually ran — a scan with
+          nothing found but three checks skipped is inconclusive, and says so. */}
+      {scan.status === "completed" && scan.findings.length === 0 && (
+        a?.clean ? (
+          <div className="flex flex-col items-center gap-3 rounded-xl p-10 text-center" style={{ border: "1px solid var(--wall-line)" }}>
+            <CheckCircle2 className="h-10 w-10" style={{ color: "var(--wall-sev-clean)" }} aria-hidden />
+            <h2 className="font-display text-xl font-bold" style={{ color: "var(--wall-text)" }}>All clear</h2>
+            <p className="text-sm" style={{ color: "var(--wall-muted)" }}>
+              All {a.rules_total} checks ran and found nothing.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-3 rounded-xl p-10 text-center" style={{ border: "1px solid rgba(255,200,61,0.25)", background: "rgba(255,200,61,0.04)" }}>
+            <AlertTriangle className="h-10 w-10" style={{ color: "var(--wall-sev-medium)" }} aria-hidden />
+            <h2 className="font-display text-xl font-bold" style={{ color: "var(--wall-text)" }}>
+              No problems found in what was scanned
+            </h2>
+            <p className="max-w-xl text-sm" style={{ color: "var(--wall-muted)" }}>
+              {a
+                ? `${a.rules_ran} of ${a.rules_total} checks ran. This is not a clean bill of health — see what was checked below.`
+                : "Coverage wasn't recorded for this scan, so we can't say every check ran."}
+            </p>
+          </div>
+        )
       )}
 
-      {grouped.map((g) => {
+      {/* Clustered issues, so repetition can't bury severity. */}
+      <GroupedFindings groups={scan.groups} findings={scan.findings} />
+
+      {/* Fallback for scans stored before grouping existed. */}
+      {!scan.groups && grouped.map((g) => {
         const limit = limits[g.confidence] ?? RENDER_CAP
         const remaining = g.items.length - limit
         return (
@@ -172,6 +199,46 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
           </section>
         )
       })}
+
+      {/* What ran, what didn't, and why. */}
+      <CoveragePanel coverage={scan.coverage} />
+
+      {/* Provenance — the exact snapshot analyzed, so the result is reproducible. */}
+      {(scan.resolved_sha || scan.content_hash) && (
+        <section className="wall-card p-4">
+          <h3 className="wall-label">What was analyzed</h3>
+          <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
+            {scan.resolved_sha && (
+              <div className="flex gap-2">
+                <dt style={{ color: "var(--wall-faint)" }}>Commit</dt>
+                <dd className="font-mono" style={{ color: "var(--wall-text)" }}>{scan.resolved_sha.slice(0, 12)}</dd>
+              </div>
+            )}
+            {scan.content_hash && (
+              <div className="flex gap-2">
+                <dt style={{ color: "var(--wall-faint)" }}>Content hash</dt>
+                <dd className="font-mono" style={{ color: "var(--wall-text)" }}>{scan.content_hash.slice(0, 16)}…</dd>
+              </div>
+            )}
+            {scan.file_count !== null && (
+              <div className="flex gap-2">
+                <dt style={{ color: "var(--wall-faint)" }}>Files analyzed</dt>
+                <dd className="wall-num" style={{ color: "var(--wall-text)" }}>{formatNumber(scan.file_count)}</dd>
+              </div>
+            )}
+            {scan.engine_versions?.rules_version && (
+              <div className="flex gap-2">
+                <dt style={{ color: "var(--wall-faint)" }}>Rule set</dt>
+                <dd className="font-mono" style={{ color: "var(--wall-text)" }}>v{scan.engine_versions.rules_version}</dd>
+              </div>
+            )}
+          </dl>
+          <p className="mt-2 text-xs" style={{ color: "var(--wall-faint)" }}>
+            Re-scanning identical code produces a new scan number with this same content hash —
+            proof it was freshly re-analyzed, not served from a cache.
+          </p>
+        </section>
+      )}
     </div>
   )
 }

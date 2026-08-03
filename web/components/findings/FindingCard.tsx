@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ChevronDown, Lightbulb, Loader2, Sparkles } from "lucide-react"
+import { ChevronDown, Lightbulb, Loader2, Sparkles, Wrench } from "lucide-react"
 import type { Explanation, Finding } from "@/lib/types"
 import { checkName, CHECKS } from "@/lib/checks"
 import { explainFinding } from "@/lib/api"
@@ -76,12 +76,75 @@ export function FindingCard({ finding }: { finding: Finding }) {
         </pre>
       )}
 
-      {finding.fix_suggestion && (
+      {/* References — CWE and published advisories as real links, so every claim the
+          finding makes is checkable against a source rather than taken on trust. */}
+      {(finding.cwe.length > 0 || finding.advisories.length > 0) && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-text-faint">References:</span>
+          {finding.cwe.map((id) => (
+            <a
+              key={id}
+              href={`https://cwe.mitre.org/data/definitions/${id.split("-").pop()}.html`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-md border border-border bg-surface px-2 py-0.5 font-mono text-xs text-text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-indigo"
+            >
+              {id}
+            </a>
+          ))}
+          {finding.advisories.map((a) => (
+            <a
+              key={a.id}
+              href={a.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-md border border-sev-high/40 bg-sev-high/10 px-2 py-0.5 font-mono text-xs text-sev-high transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-indigo"
+            >
+              {a.id}
+            </a>
+          ))}
+          {finding.severity && (
+            <span className="rounded-md border border-border px-2 py-0.5 text-xs uppercase text-text-muted" title="Severity as reported by the advisory source — not computed by us.">
+              {finding.severity}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Remediation. A concrete replacement is shown as a diff ONLY when it was derived
+          mechanically from a named fixed version; anything else is prose that says so. */}
+      {finding.remediation?.applicable && finding.remediation.suggested_replacement ? (
+        <div className="mt-3 rounded-md border border-brand-teal/30 bg-brand-teal/5 p-3">
+          <div className="flex items-start gap-2 text-sm text-text">
+            <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-brand-teal" aria-hidden />
+            <span>{finding.remediation.text}</span>
+          </div>
+          <pre className="mt-2 overflow-x-auto rounded border border-border bg-bg p-2 font-mono text-xs">
+            <div className="text-sev-high">- {ev.snippet}</div>
+            <div className="text-brand-teal">+ {finding.remediation.suggested_replacement}</div>
+          </pre>
+          {finding.remediation.basis && (
+            <p className="mt-2 text-[11px] text-text-faint">Basis: {finding.remediation.basis}.</p>
+          )}
+        </div>
+      ) : finding.remediation ? (
+        <div className="mt-3 flex items-start gap-2 rounded-md border border-border bg-surface p-3 text-sm text-text-muted">
+          <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-brand-teal" aria-hidden />
+          <span>
+            {finding.remediation.text}
+            {finding.remediation.basis && (
+              <span className="mt-1 block text-[11px] text-text-faint">
+                No automatic fix offered: {finding.remediation.basis}.
+              </span>
+            )}
+          </span>
+        </div>
+      ) : finding.fix_suggestion ? (
         <div className="mt-3 flex items-start gap-2 rounded-md border border-brand-teal/30 bg-brand-teal/5 p-3 text-sm text-text-muted">
           <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-brand-teal" aria-hidden />
           <span>{finding.fix_suggestion}</span>
         </div>
-      )}
+      ) : null}
 
       {/* The Crew — advisory AI explainer (Phase 7) */}
       {!exp && (
@@ -130,6 +193,17 @@ export function FindingCard({ finding }: { finding: Finding }) {
           </p>
         </div>
       )}
+
+      {/* Provenance — which detector and rule revision produced this. A finding a reader
+          cannot trace back to its source is a claim, not a result. */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 font-mono text-[11px] text-text-faint">
+        <span>
+          via {finding.tool || "builtin"}
+          {finding.tool_version ? ` ${finding.tool_version}` : ""}
+        </span>
+        {finding.rule_version && <span>rules v{finding.rule_version}</span>}
+        {finding.fingerprint && <span title="Content-derived id — stable across scans and line moves.">#{finding.fingerprint}</span>}
+      </div>
 
       <div className="sr-only">{CHECKS[finding.rule_id]?.blurb}</div>
     </div>
