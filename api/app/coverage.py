@@ -22,7 +22,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from app.manifests import LOCKFILE_ECOSYSTEM, MANIFEST_ECOSYSTEM
+from app.manifests import (
+    LOCKFILE_ECOSYSTEM,
+    MANIFEST_ECOSYSTEM,
+    parse_pins,
+    versioned_manifest_ecosystem,
+)
 
 # --- statuses ---------------------------------------------------------------------
 # Deliberately distinct: each one needs different wording in the report, and lumping
@@ -61,12 +66,16 @@ _LANGUAGE_BY_EXT: Dict[str, str] = {
 
 # Manifests/lockfiles for ecosystems the Guard cannot parse yet. Listing them lets a
 # scan say "found go.mod, cannot read it" instead of reporting nothing at all.
+#
+# go.mod, pom.xml, build.gradle(.kts), *.csproj, Gemfile.lock, composer.lock and
+# packages.lock.json have moved out of this list: app.pinned reads exact versions from
+# them, so SQG004 covers them. Gemfile and composer.json stay — they declare version
+# *ranges* that only their lockfile resolves — as do the ecosystems with no parser at all.
 _UNSUPPORTED_MANIFESTS: Dict[str, str] = {
-    "go.mod": "go", "pom.xml": "maven", "build.gradle": "maven",
-    "build.gradle.kts": "maven", "Gemfile": "rubygems", "Gemfile.lock": "rubygems",
-    "composer.json": "packagist", "composer.lock": "packagist",
+    "Gemfile": "rubygems",
+    "composer.json": "packagist",
     "pubspec.yaml": "pub", "mix.exs": "hex", "cabal.project": "hackage",
-    "pnpm-lock.yaml": "npm", "packages.lock.json": "nuget",
+    "pnpm-lock.yaml": "npm",
 }
 
 
@@ -106,14 +115,22 @@ class Census:
     language_files: Dict[str, int] = field(default_factory=dict)   # "Go" -> 412
     manifests: Dict[str, str] = field(default_factory=dict)        # path -> ecosystem
     lockfiles: Dict[str, str] = field(default_factory=dict)        # path -> ecosystem
+    # Manifests we can read exact versions from but cannot yet query a registry by name
+    # for (go.mod, pom.xml, *.csproj …) — see manifests.VERSIONED_MANIFEST_ECOSYSTEM.
+    versioned_manifests: Dict[str, str] = field(default_factory=dict)  # path -> ecosystem
     unreadable_manifests: Dict[str, str] = field(default_factory=dict)  # path -> ecosystem
-    # Ecosystems with at least one manifest declaring a version range.
+    # Ecosystems with at least one manifest declaring a version range, or a dependency
+    # whose version this file alone cannot resolve.
     range_ecosystems: set = field(default_factory=set)
 
     @property
     def ecosystems(self) -> set:
         """Ecosystems the Guard can currently resolve packages for."""
-        return set(self.manifests.values()) | set(self.lockfiles.values())
+        return (
+            set(self.manifests.values())
+            | set(self.lockfiles.values())
+            | set(self.versioned_manifests.values())
+        )
 
     @property
     def unreadable_ecosystems(self) -> set:
@@ -139,9 +156,30 @@ def take_census(files: Dict[str, str]) -> Census:
             if _declares_ranges(files[path], ecosystem):
                 census.range_ecosystems.add(ecosystem)
         elif base in LOCKFILE_ECOSYSTEM:
-            census.lockfiles[path] = LOCKFILE_ECOSYSTEM[base]
+            ecosystem = LOCKFILE_ECOSYSTEM[base]
+            census.lockfiles[path] = ecosystem
+            # Bundler GIT/PATH gems and branch-pinned Composer packages have no
+            # queryable release version even though the lockfile is fully readable.
+            if parse_pins(path, files[path]).unresolved:
+                census.range_ecosystems.add(ecosystem)
         elif base in _UNSUPPORTED_MANIFESTS:
             census.unreadable_manifests[path] = _UNSUPPORTED_MANIFESTS[base]
+        else:
+            ecosystem = versioned_manifest_ecosystem(path)
+            if ecosystem:
+                census.versioned_manifests[path] = ecosystem
+                # A Gradle version catalog, an inherited Maven property or a NuGet
+                # range means some dependency in this file has no determinable version.
+                if parse_pins(path, files[path]).unresolved:
+                    census.range_ecosystems.add(ecosystem)
+
+    # An ecosystem covered by one file is not "unreadable" because another of its files
+    # is: a repo with Gemfile *and* Gemfile.lock is fully readable via the lock, and
+    # listing rubygems as both covered and uncovered would be self-contradictory.
+    covered = census.ecosystems
+    census.unreadable_manifests = {
+        path: eco for path, eco in census.unreadable_manifests.items() if eco not in covered
+    }
     return census
 
 
@@ -184,14 +222,20 @@ CAPABILITIES: Dict[str, RuleCapability] = {
     ),
     "SQG004": RuleCapability(
         "SQG004", "Known vulnerabilities",
-        ecosystems=frozenset({"pypi", "npm", "crates", "go"}),
+        # Wider than SQG001/SQG005 on purpose: OSV answers by (ecosystem, name, version),
+        # so any file app.pinned can read an exact version out of is checkable, even
+        # where we cannot yet query that ecosystem's registry by name.
+        ecosystems=frozenset({
+            "pypi", "npm", "crates", "go", "maven", "rubygems", "packagist", "nuget",
+        }),
         needs_exact_versions=True,
     ),
     "SQG005": RuleCapability(
         "SQG005", "Risky licenses",
-        # licenses.py::_SUPPORTED — narrower than SQG001, which is exactly the kind of
-        # gap that used to be invisible.
-        ecosystems=frozenset({"pypi", "npm"}),
+        # licenses.py — pypi/npm come from registry metadata; packagist is read straight
+        # out of composer.lock, which declares each package's license. Still narrower
+        # than SQG004, which is exactly the kind of gap that used to be invisible.
+        ecosystems=frozenset({"pypi", "npm", "packagist"}),
     ),
     "SQG006": RuleCapability(
         "SQG006", "Dangerous code patterns",

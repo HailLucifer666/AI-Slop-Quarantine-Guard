@@ -9,9 +9,27 @@ them would be a false positive.
 import json
 import re
 import tomllib
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
+
+from app.pinned import (
+    ManifestPins,
+    parse_build_gradle,
+    parse_composer_lock,
+    parse_csproj,
+    parse_gemfile_lock,
+    parse_go_mod,
+    parse_packages_lock_json,
+    parse_pom_xml,
+)
 
 # Map a manifest basename to the ecosystem whose registry should answer for it.
+#
+# This map drives SQG001 (existence) and SQG005 (license), both of which query a public
+# registry by name. A basename only belongs here once `registries._registry_url` and
+# `licenses._SUPPORTED` can actually answer for that ecosystem — otherwise SQG001 reports
+# every dependency as "registry unreachable", which is a false statement about why we
+# don't know. Ecosystems we can read *versions* from but not yet query by name live in
+# VERSIONED_MANIFEST_ECOSYSTEM below.
 MANIFEST_ECOSYSTEM: Dict[str, str] = {
     "requirements.txt": "pypi",
     "pyproject.toml": "pypi",
@@ -173,6 +191,9 @@ LOCKFILE_ECOSYSTEM: Dict[str, str] = {
     "poetry.lock": "pypi",
     "Cargo.lock": "crates",
     "go.sum": "go",
+    "Gemfile.lock": "rubygems",
+    "composer.lock": "packagist",
+    "packages.lock.json": "nuget",
 }
 
 # yarn.lock resolved version line — classic v1 (`version "1.2.3"`) and berry
@@ -293,6 +314,80 @@ def extract_pinned_lockfile(filename: str, content: str) -> List[Tuple[str, str]
             return parse_yarn_lock(content)
         if base == "go.sum":
             return parse_go_sum(content)
+        if base in _EXTRA_LOCKFILE_PARSERS:
+            return _EXTRA_LOCKFILE_PARSERS[base](content).pins
     except (tomllib.TOMLDecodeError, json.JSONDecodeError, ValueError, AttributeError):
         return []
     return []
+
+
+# --- Ecosystems we can version but not yet name-check ------------------------------
+# Go, Maven, RubyGems, Packagist and NuGet manifests pin exact versions, which is all
+# SQG004 needs to ask OSV whether a version is known-vulnerable. They are deliberately
+# NOT in MANIFEST_ECOSYSTEM: SQG001 would then query a registry client that has no URL
+# for them and report "registry unreachable" — describing a support gap as an outage.
+# Parsers live in app/pinned.py; this section is only the routing table.
+
+VERSIONED_MANIFEST_ECOSYSTEM: Dict[str, str] = {
+    "go.mod": "go",
+    "pom.xml": "maven",
+    "build.gradle": "maven",
+    "build.gradle.kts": "maven",
+}
+
+# .NET project files are named after the project, so they match on extension.
+VERSIONED_MANIFEST_SUFFIXES: Dict[str, str] = {
+    ".csproj": "nuget",
+    ".fsproj": "nuget",
+    ".vbproj": "nuget",
+}
+
+_VERSIONED_PARSERS: Dict[str, Callable[[str], ManifestPins]] = {
+    "go.mod": parse_go_mod,
+    "pom.xml": parse_pom_xml,
+    "build.gradle": parse_build_gradle,
+    "build.gradle.kts": parse_build_gradle,
+}
+
+_EXTRA_LOCKFILE_PARSERS: Dict[str, Callable[[str], ManifestPins]] = {
+    "Gemfile.lock": parse_gemfile_lock,
+    "composer.lock": parse_composer_lock,
+    "packages.lock.json": parse_packages_lock_json,
+}
+
+
+def versioned_manifest_ecosystem(filename: str) -> str | None:
+    """Ecosystem for a manifest we can read exact versions from, else None.
+
+    Covers only the ecosystems absent from MANIFEST_ECOSYSTEM — callers that want "any
+    file with pins" check this, `manifest_ecosystem` and `lockfile_ecosystem` in turn.
+    """
+    base = filename.rsplit("/", 1)[-1]
+    if base in VERSIONED_MANIFEST_ECOSYSTEM:
+        return VERSIONED_MANIFEST_ECOSYSTEM[base]
+    dot = base.rfind(".")
+    if dot > 0:
+        return VERSIONED_MANIFEST_SUFFIXES.get(base[dot:].lower())
+    return None
+
+
+def parse_pins(filename: str, content: str) -> ManifestPins:
+    """Pins plus unresolved count for any file in the newly supported ecosystems.
+
+    Returns an empty result for anything else, including the pypi/npm/crates files whose
+    pins are read elsewhere — this is the extension point, not a replacement for them.
+    A parse failure yields no pins and no unresolved count: an unparseable file is a
+    silence we report through coverage, never a guess.
+    """
+    base = filename.rsplit("/", 1)[-1]
+    parser = _VERSIONED_PARSERS.get(base) or _EXTRA_LOCKFILE_PARSERS.get(base)
+    if parser is None:
+        dot = base.rfind(".")
+        if dot > 0 and base[dot:].lower() in VERSIONED_MANIFEST_SUFFIXES:
+            parser = parse_csproj
+    if parser is None:
+        return ManifestPins()
+    try:
+        return parser(content)
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        return ManifestPins()

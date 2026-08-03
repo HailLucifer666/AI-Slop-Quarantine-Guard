@@ -153,3 +153,71 @@ def test_pypi_label_flags_real_gpl_via_classifier():
 def test_pypi_label_keeps_short_spdx_identifier():
     info = {"license": "GPL-3.0-only", "license_expression": None, "classifiers": []}
     assert _COPYLEFT.search(_pypi_license_label(info)) is not None
+
+
+# --- Packagist: license declared in the lockfile, no registry call -------------
+
+COMPOSER_LOCK_GPL = """{
+  "packages": [
+    {"name": "monolog/monolog", "version": "1.25.3", "license": ["MIT"]},
+    {"name": "copyleft/lib", "version": "2.0.0", "license": ["GPL-3.0-or-later"]},
+    {"name": "nolicense/pkg", "version": "1.0.0"}
+  ],
+  "packages-dev": [
+    {"name": "dual/licensed", "version": "1.0.0", "license": ["MIT", "LGPL-2.1"]}
+  ]
+}
+"""
+
+
+def _lock_diff() -> str:
+    lines = COMPOSER_LOCK_GPL.splitlines()
+    body = "".join(f"+{line}\n" for line in lines)
+    return f"--- a/composer.lock\n+++ b/composer.lock\n@@ -0,0 +1,{len(lines)} @@\n{body}"
+
+
+@pytest.mark.asyncio
+async def test_composer_lock_copyleft_flagged_without_any_registry_call():
+    """Composer records the license in the lockfile, so this needs no network.
+
+    The injected fetcher raises if the license path is ever consulted — proof the
+    finding came from the repository's own file, which is what `tool` claims.
+    """
+    async def fetch_file(repo, path, ref, token):
+        return COMPOSER_LOCK_GPL if path == "composer.lock" else None
+
+    async def must_not_call(ecosystem, name, client):
+        raise AssertionError("composer.lock licenses must not hit a registry")
+
+    findings = await check_licenses(
+        _lock_diff(), {"repo": "o/r", "head_sha": "s", "token": "t"},
+        fetch_file=fetch_file, fetch_license=must_not_call,
+    )
+    names = {f.message.split("'")[1] for f in findings}
+    assert "copyleft/lib" in names
+    assert "dual/licensed" in names       # LGPL half of a dual license still warrants review
+    assert "monolog/monolog" not in names  # MIT
+    assert "nolicense/pkg" not in names    # no metadata → silent, never inferred
+    assert all(f.tool == "lockfile" for f in findings)
+    assert all(f.block_eligible is False for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_composer_lock_findings_are_advisory_medium():
+    async def fetch_file(repo, path, ref, token):
+        return COMPOSER_LOCK_GPL
+
+    findings = await check_licenses(
+        _lock_diff(), {"repo": "o/r", "head_sha": "s", "token": "t"}, fetch_file=fetch_file
+    )
+    assert findings and all(f.confidence is Confidence.MEDIUM for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_malformed_composer_lock_is_silent():
+    async def fetch_file(repo, path, ref, token):
+        return "{not json"
+
+    assert await check_licenses(
+        _lock_diff(), {"repo": "o/r", "head_sha": "s", "token": "t"}, fetch_file=fetch_file
+    ) == []

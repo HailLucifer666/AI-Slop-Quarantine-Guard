@@ -246,3 +246,108 @@ async def test_one_batched_call_for_many_distinct_pins():
     )
     assert len(calls) == 1                # one batch invocation, not 50
     assert len(calls[0]) == 50            # all distinct pins in it
+
+
+# --- new ecosystems: Go / Maven / RubyGems / Packagist / NuGet ---------------
+# Before app.pinned existed, every one of these repos got zero SQG004 findings —
+# not because they were clean, but because no parser read their manifests. Each
+# test asserts the pin reaches OSV under that ecosystem's own naming convention,
+# since a near-miss name returns a confident, wrong "no known vulnerabilities".
+
+@pytest.mark.asyncio
+async def test_go_mod_pin_reaches_osv_without_the_v_prefix():
+    from tests.test_pinned import GO_MOD
+
+    seen: list = []
+    diff = _diff("go.mod", GO_MOD.splitlines())
+    ctx, kw = _ctx({"go.mod": GO_MOD}, vulns=[{"id": "GO-2023-1234"}], seen=seen)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert ("go", "golang.org/x/crypto", "0.14.0") in seen
+    assert any(f.file_path == "go.mod" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_pom_pin_reaches_osv_as_group_colon_artifact():
+    from tests.test_pinned import POM
+
+    seen: list = []
+    diff = _diff("pom.xml", POM.splitlines())
+    ctx, kw = _ctx({"pom.xml": POM}, vulns=[{"id": "GHSA-jfh8-c2jp-5v3q"}], seen=seen)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert ("maven", "org.apache.logging.log4j:log4j-core", "2.14.1") in seen
+    assert findings and all(f.rule_id == "SQG004" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_pom_finding_anchors_to_a_line_the_file_actually_has():
+    """A POM spreads groupId, artifactId and version over three lines, so the
+    locator must still land inside the diff rather than returning line 0."""
+    from tests.test_pinned import POM
+
+    lines = POM.splitlines()
+    diff = _diff("pom.xml", lines)
+    ctx, kw = _ctx({"pom.xml": POM}, vulns=[{"id": "GHSA-x"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert findings
+    for f in findings:
+        assert 1 <= f.line_start <= len(lines)
+
+
+@pytest.mark.asyncio
+async def test_gemfile_lock_pin_reaches_osv():
+    from tests.test_pinned import GEMFILE_LOCK
+
+    seen: list = []
+    diff = _diff("Gemfile.lock", GEMFILE_LOCK.splitlines())
+    ctx, kw = _ctx({"Gemfile.lock": GEMFILE_LOCK}, vulns=[{"id": "GHSA-y"}], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    assert ("rubygems", "actionpack", "7.0.4") in seen
+
+
+@pytest.mark.asyncio
+async def test_composer_lock_pin_reaches_osv():
+    from tests.test_pinned import COMPOSER_LOCK
+
+    seen: list = []
+    diff = _diff("composer.lock", COMPOSER_LOCK.splitlines())
+    ctx, kw = _ctx({"composer.lock": COMPOSER_LOCK}, vulns=[{"id": "GHSA-z"}], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    assert ("packagist", "monolog/monolog", "1.25.3") in seen
+
+
+@pytest.mark.asyncio
+async def test_csproj_pin_reaches_osv():
+    from tests.test_pinned import CSPROJ
+
+    seen: list = []
+    diff = _diff("src/Api/Api.csproj", CSPROJ.splitlines())
+    ctx, kw = _ctx({"src/Api/Api.csproj": CSPROJ}, vulns=[{"id": "GHSA-w"}], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    assert ("nuget", "Newtonsoft.Json", "12.0.1") in seen
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_versions_are_never_queried():
+    """The whole point of the unresolved count: a Gradle variable, an inherited
+    Maven property and a NuGet range must not be sent to OSV as if they were
+    versions. A wrong version yields a wrong answer stated as fact."""
+    from tests.test_pinned import CSPROJ, GRADLE
+
+    seen: list = []
+    files = {"build.gradle": GRADLE, "Api.csproj": CSPROJ}
+    diff = _diff("build.gradle", GRADLE.splitlines()) + _diff("Api.csproj", CSPROJ.splitlines())
+    ctx, kw = _ctx(files, vulns=[], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    queried = {name: version for _eco, name, version in seen}
+    assert "org.example:configurable" not in queried
+    assert "Ranged" not in queried and "Variable" not in queried
+    assert all("$" not in v and "*" not in v and "[" not in v for v in queried.values())
+
+
+@pytest.mark.asyncio
+async def test_osv_outage_on_a_new_ecosystem_still_fails_safe():
+    from tests.test_pinned import POM
+
+    diff = _diff("pom.xml", POM.splitlines())
+    ctx, kw = _ctx({"pom.xml": POM}, osv_down=True)
+    assert await check_vulnerabilities(diff, ctx, **kw) == []

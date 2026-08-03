@@ -10,12 +10,16 @@ Hard rules (product constraints):
 * Fail-safe. OSV unreachable / timeout / 429 → return None → the dep is silently
   skipped. A vuln-feed outage must never fail a PR.
 
-Scope (MVP): only *exactly pinned* versions are checkable —
-* pip ``name==1.2.3`` (requirements.txt)
-* npm exact semver values (package.json)
-Range/caret specs (``^1.2``, ``>=1.0``, Cargo bare versions, pyproject ranges)
-need a real resolver to know the installed version; querying the declared spec
-would be misleading, so they are skipped. Resolver + crates/pyproject → backlog.
+Scope: only *exactly pinned* versions are checkable. Those come from
+* pip ``name==1.2.3`` (requirements.txt) and npm exact semver (package.json);
+* every supported lockfile, which pins the whole resolved tree (manifests.py);
+* the Go / Maven / NuGet manifests parsed by ``app.pinned``, which carry literal
+  versions of their own.
+Range/caret specs (``^1.2``, ``>=1.0``, Cargo bare versions, pyproject ranges) and
+unresolvable references (a Gradle version catalog, an inherited Maven property)
+need a resolver to know the installed version; querying the declared spec would be
+misleading, so they are skipped — and counted, so coverage reports the file as
+partially read rather than fully checked.
 
 Like SQG001, only versions appearing on *added* lines are queried — the PR is
 judged on what it introduced, not what was already there.
@@ -34,6 +38,8 @@ from app.manifests import (
     lockfile_ecosystem,
     manifest_ecosystem,
     parse_package_json,
+    parse_pins,
+    versioned_manifest_ecosystem,
 )
 
 from .base import (
@@ -54,7 +60,14 @@ _OSV_URL = "https://api.osv.dev/v1/query"
 _OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 # Our ecosystem key → OSV ecosystem name. Manifests pin only pypi/npm exactly;
 # lockfiles add crates.io + Go (fully resolved, exact versions — see manifests.py).
-_OSV_ECOSYSTEM = {"pypi": "PyPI", "npm": "npm", "crates": "crates.io", "go": "Go"}
+_OSV_ECOSYSTEM = {
+    "pypi": "PyPI", "npm": "npm", "crates": "crates.io", "go": "Go",
+    # Added once app.pinned could read exact versions out of these ecosystems'
+    # manifests and lockfiles. Names must use OSV's spelling for the ecosystem —
+    # "groupId:artifactId" for Maven, "vendor/package" for Packagist — or the query
+    # silently returns "no known vulnerabilities" for a package that has plenty.
+    "maven": "Maven", "rubygems": "RubyGems", "packagist": "Packagist", "nuget": "NuGet",
+}
 _TIMEOUT = 8.0
 _RETRIES = 2
 _BATCH_SIZE = 1000   # OSV /v1/querybatch accepts up to 1000 queries per request
@@ -194,6 +207,30 @@ def _find_lock_line(name: str, version: str, added: List[Tuple[int, str]]) -> Op
         if version in text:
             return line_no
     return None
+
+
+def _find_versioned_line(name: str, version: str, added: List[Tuple[int, str]]) -> Optional[int]:
+    """Locate a pin from a Go / Maven / NuGet manifest in the added lines.
+
+    These formats vary in layout: go.mod, Gradle and .csproj put the coordinate and its
+    version on one line, while a Maven POM spreads groupId, artifactId and version over
+    three. So try the whole coordinate on one line first, then the artifact name alone,
+    and only then report the line the version sits on. The (name, version) pair itself
+    came from an authoritative parse, so the finding is real even when the reported line
+    is the version's rather than the declaration's.
+    """
+    same_line = next((ln for ln, text in added if name in text and version in text), None)
+    if same_line is not None:
+        return same_line
+
+    # Last path/coordinate segment: "org.foo:bar" → "bar", "github.com/pkg/errors" → "errors".
+    token = name.rsplit(":", 1)[-1].rsplit("/", 1)[-1]
+    same_line = next((ln for ln, text in added if token in text and version in text), None)
+    if same_line is not None:
+        return same_line
+    if not any(token in text for _, text in added):
+        return None
+    return next((ln for ln, text in added if version in text), None)
 
 
 def _fixed_versions(vulns: list) -> List[str]:
@@ -351,7 +388,9 @@ async def check_vulnerabilities(
         for path, added in added_by_file.items():
             lock_eco = lockfile_ecosystem(path)
             is_lock = lock_eco in _OSV_ECOSYSTEM
-            if not is_lock and manifest_ecosystem(path) not in _OSV_ECOSYSTEM:
+            versioned_eco = versioned_manifest_ecosystem(path)
+            is_versioned = not is_lock and versioned_eco in _OSV_ECOSYSTEM
+            if not is_lock and not is_versioned and manifest_ecosystem(path) not in _OSV_ECOSYSTEM:
                 continue
             content = await fetch_file(repo, path, head_sha, token)
             if content is None:
@@ -361,6 +400,11 @@ async def check_vulnerabilities(
                 # Lockfile: the fully resolved tree, all pinned exactly.
                 pins = [(lock_eco, n, v) for n, v in extract_pinned_lockfile(path, content)]
                 locate = _find_lock_line
+            elif is_versioned:
+                # go.mod / pom.xml / build.gradle / *.csproj — literal versions only;
+                # whatever the parser could not resolve is simply absent here.
+                pins = [(versioned_eco, n, v) for n, v in parse_pins(path, content).pins]
+                locate = _find_versioned_line
             else:
                 pins = _pinned_deps(path, content)
                 locate = _find_line

@@ -11,7 +11,16 @@ Hard rules (product constraints):
 * Fail-safe. Registry unreachable / no license declared → silent. A metadata
   gap must never fail a PR.
 
-Scope (MVP): PyPI + npm, whose registry JSON exposes license metadata directly.
+Scope: PyPI + npm, whose registry JSON exposes license metadata directly, plus
+Packagist — Composer writes each resolved package's license into composer.lock, so
+that ecosystem needs no network call at all and is read straight from the file.
+
+RubyGems, Maven and NuGet remain uncovered: their licenses are only obtainable one
+HTTP request per package, and a Gemfile.lock routinely holds 200 gems. Doing that
+serially inside the analyzer's wall-clock budget would time the check out — which
+coverage would then report as `timed_out`, a worse outcome than an honest
+`not_covered`. Bounded-concurrency registry fetching → backlog.
+
 crates.io and range-spec resolution → backlog. Only dependencies appearing on
 *added* lines are checked — the PR is judged on what it introduced.
 """
@@ -22,7 +31,8 @@ from typing import Callable, List, Optional
 import httpx
 
 from app.diff import parse_diff
-from app.manifests import extract_dependency_names, manifest_ecosystem
+from app.manifests import extract_dependency_names, lockfile_ecosystem, manifest_ecosystem
+from app.pinned import composer_lock_licenses
 from app.registries import normalize_pypi
 
 from .base import Confidence, Evidence, Finding
@@ -31,6 +41,9 @@ RULE_ID = "SQG005"
 
 # Ecosystems whose registry JSON we can read a license from.
 _SUPPORTED = {"pypi", "npm"}
+
+# Lockfiles that record the license themselves — no registry lookup needed.
+_DECLARED_LICENSE_LOCKFILES = {"packagist"}
 
 # Copyleft / network-copyleft families worth a human glance.
 _COPYLEFT = re.compile(
@@ -110,7 +123,9 @@ def _name_present(name: str, added: list[tuple[int, str]]) -> Optional[int]:
     return None
 
 
-def _finding(name: str, license_label: str, match: str, path: str, line: int) -> Finding:
+def _finding(
+    name: str, license_label: str, match: str, path: str, line: int, source: str = "registry"
+) -> Finding:
     return Finding(
         category="license",
         confidence=Confidence.MEDIUM,
@@ -120,7 +135,9 @@ def _finding(name: str, license_label: str, match: str, path: str, line: int) ->
         line_end=line,
         message=f"Dependency '{name}' is copyleft-licensed ({match}) — review distribution obligations",
         evidence=Evidence(snippet=f"{name}: {license_label[:120]}"),
-        tool="registry",
+        # Names where the label came from, because "the lockfile says GPL" and "the
+        # registry says GPL" are different claims a reviewer may want to re-check.
+        tool=source,
         rule_id=RULE_ID,
         fix_suggestion="Confirm the license is compatible with your project's license and distribution model.",
     )
@@ -152,6 +169,21 @@ async def check_licenses(
     findings: List[Finding] = []
     async with httpx.AsyncClient(timeout=10) as client:
         for path, added in added_by_file.items():
+            if lockfile_ecosystem(path) in _DECLARED_LICENSE_LOCKFILES:
+                content = await fetch_file(repo, path, head_sha, token)
+                if content is None:
+                    continue
+                for name, label in composer_lock_licenses(content):
+                    line = _name_present(name, added)
+                    if line is None:
+                        continue  # not introduced by this PR
+                    m = _COPYLEFT.search(label)
+                    if m:
+                        findings.append(
+                            _finding(name, label, m.group(0), path, line, source="lockfile")
+                        )
+                continue
+
             ecosystem = manifest_ecosystem(path)
             if ecosystem not in _SUPPORTED:
                 continue
