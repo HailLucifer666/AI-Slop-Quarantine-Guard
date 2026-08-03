@@ -260,7 +260,7 @@ Build order within this phase:
 
 ### SQG001 — Fake Package Checker
 
-**What it does:** For every package added in the diff, queries the public registry (PyPI, npm, crates.io, Go proxy) to verify the package exists.
+**What it does:** For every package added in the diff, queries the public registry (PyPI, npm, crates.io) to verify the package exists. There is no Go proxy client — Go, Maven, RubyGems, Packagist and NuGet are covered by the CVE check (SQG004), not by this one; `docs/CHECKS_CATALOG.md` explains why a CERTAIN 404 is not safe in those ecosystems yet.
 
 **False-positive controls (critical):**
 - Registry unreachable / timeout / rate-limited → retry with backoff → if still failing, emit `degraded` status (never block)

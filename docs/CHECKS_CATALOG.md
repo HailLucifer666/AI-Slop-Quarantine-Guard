@@ -14,8 +14,8 @@
 > | SQG001 | Live PyPI / npm / crates.io registry lookups | — |
 > | SQG002 | Curated regex + format validation (`analyzers/secrets.py`) | gitleaks |
 > | SQG003 | Regex over added lines (`analyzers/placeholders.py`) | tree-sitter AST |
-> | SQG004 | Live OSV.dev HTTP API (`analyzers/vulns.py`) | Trivy, osv-scanner |
-> | SQG005 | PyPI / npm registry license metadata (`analyzers/licenses.py`) | Trivy, Syft |
+> | SQG004 | Live OSV.dev HTTP API (`analyzers/vulns.py`) over pypi, npm, crates, go, maven, rubygems, packagist, nuget | Trivy, osv-scanner |
+> | SQG005 | PyPI / npm registry license metadata + `composer.lock` declared licenses (`analyzers/licenses.py`) | Trivy, Syft |
 > | SQG006 | Curated regex, Python + JavaScript only (`analyzers/sast.py`) | Semgrep |
 > | SQG007 | Edit distance against a curated popular-package list | — |
 >
@@ -56,7 +56,7 @@ Each check is normalized into one universal **Finding** record:
 | Aspect | Details |
 |---|---|
 | **Category** | Dependency integrity |
-| **Tools** | Custom registry clients (PyPI JSON API, npm, crates.io, Go proxy) |
+| **Tools** | Custom registry clients — PyPI JSON API, npm registry, crates.io (`registries.py`). **No Go proxy client exists**; see Scope below for why the other ecosystems are deliberately not existence-checked |
 | **Confidence** | **CERTAIN** (if registry reachable and returns clean 404) |
 | **Block-Eligible** | ✓ Yes (CERTAIN) |
 | **Message** | `"Package 'quantumllm_helper==1.0.0' does not exist in PyPI (404)"` |
@@ -71,8 +71,9 @@ Each check is normalized into one universal **Finding** record:
 
 ### Scope
 
-- **Supported manifests:** `requirements.txt`, `pyproject.toml` (pip, poetry, uv), `package.json` (npm, pnpm, yarn, bun), `Cargo.toml` (Rust), `go.mod` (Go), `Gemfile` (Ruby).
-- **Parsed via real libraries:** `packaging` (Python), `tomli` (TOML), actual `package.json` parser, `Cargo.toml` TOML parser.
+- **Supported manifests (today):** `requirements.txt`, `pyproject.toml` (pip, poetry, uv), `package.json` (npm, pnpm, yarn, bun), `Cargo.toml` (Rust) — the three ecosystems `registries.py` has a client for. `go.mod` and `Gemfile` are **not** existence-checked; the coverage table lists their ecosystems under *not covered* for this rule.
+- **Why not the other ecosystems, when SQG004 covers them:** the two rules need different things. SQG004 asks OSV about an (ecosystem, name, version) triple and a wrong answer is an advisory; SQG001 asks a registry whether a name exists at all, and a clean 404 is **CERTAIN and block-eligible**. Go, Maven and NuGet are the ecosystems where private and internal artifacts are most common (a company GitLab module path, an internal Nexus artifact, a private NuGet feed), so a public-registry 404 there is frequently not evidence of a hallucinated package. Shipping it would mean either false blocks or advisory noise on every internal dependency. The controls that make this safe for pypi/npm — `has_pip_extra_index`, `npmrc_private_scopes` — have no equivalent yet for `settings.xml`, `nuget.config` or `GOPRIVATE`. Until they do, the honest report is *not covered*.
+- **Parsed via real libraries:** stdlib `tomllib` (TOML), the stdlib `json` parser for `package.json`, and a PEP 508 name tokenizer for requirements.
 
 ---
 
@@ -151,7 +152,9 @@ The **fact** "package X version Y is installed and has CVE-Z" is certain. But "y
 
 ### Scope
 
-- **Manifest parsing (today):** `requirements.txt`, `pyproject.toml`, `package.json`, `Cargo.toml` for declared deps; `package-lock.json`, `yarn.lock`, `poetry.lock`, `Cargo.lock`, `go.sum` for exact pins. **Not parsed yet:** `go.mod`, `pom.xml`, `build.gradle`, `Gemfile.lock`, `composer.lock`, `*.csproj` — a repo using only those is reported as not covered, not as clean.
+- **Manifest parsing (today):** `requirements.txt`, `pyproject.toml`, `package.json`, `Cargo.toml` for declared deps; `package-lock.json`, `yarn.lock`, `poetry.lock`, `Cargo.lock`, `go.sum`, `Gemfile.lock`, `composer.lock`, `packages.lock.json` for exact pins; `go.mod`, `pom.xml`, `build.gradle(.kts)` and `*.csproj`/`*.fsproj`/`*.vbproj` for the literal versions they declare (`app/pinned.py`). That makes SQG004 cover Go, Maven, RubyGems, Packagist and NuGet, verified against the live OSV API.
+- **Deliberately not resolved:** a Gradle version catalog (`libs.okhttp`), a Maven `${property}` defined in a parent POM, a NuGet range (`[13.0.1, )`) or MSBuild variable, a Bundler `GIT`/`PATH` gem, and a Composer `dev-` branch pin. Each names no determinable installed version, so it is **counted** and the file reports as *partial* — never guessed at, because a wrong version returns a confident, wrong "no known vulnerabilities".
+- **Still not parsed:** `pnpm-lock.yaml`, `Gemfile`/`composer.json` without their lockfile, `pubspec.yaml`, `mix.exs`, `cabal.project` — a repo using only those is reported as not covered, not as clean.
 - **Tools:** today, OSV matched against Google's advisory database over HTTP. Planned: Trivy over the resolved tree, for the ecosystems above.
 - **Range specs:** a manifest declaring `^1.2.3` with no lockfile cannot be resolved to an installed version, so SQG004 reports *partial* coverage rather than guessing.
 
@@ -162,7 +165,7 @@ The **fact** "package X version Y is installed and has CVE-Z" is certain. But "y
 | Aspect | Details |
 |---|---|
 | **Category** | Legal compliance |
-| **Tools** | **Today:** license metadata from PyPI / npm registry JSON (`analyzers/licenses.py`) — pypi and npm only. **Planned:** Trivy, Syft for SBOM-based detection |
+| **Tools** | **Today:** license metadata from PyPI / npm registry JSON, plus the licenses `composer.lock` declares inline (`analyzers/licenses.py`) — pypi, npm and packagist. **Planned:** Trivy, Syft for SBOM-based detection |
 | **Confidence** | **HIGH** (GPL in proprietary = risky) · **MEDIUM** (unknown license) |
 | **Block-Eligible** | ✗ No (advisory, legal decision required) |
 | **Message** | `"Dependency 'libgpl==1.0' is GPL; your project is proprietary. Risk: forced open-source."` |
@@ -176,7 +179,8 @@ The **fact** "package X version Y is installed and has CVE-Z" is certain. But "y
 
 ### Scope
 
-- **Licenses detected (today):** the registry's own license field, SPDX expression and trove classifiers for PyPI and npm packages. Cargo, Go, Maven, Bundler, Composer and NuGet are **not** covered and are reported as such.
+- **Licenses detected (today):** the registry's own license field, SPDX expression and trove classifiers for PyPI and npm packages; for Packagist, the `license` array Composer writes into `composer.lock` — so that ecosystem needs no network call and the claim's source is the repository's own file (the finding's `tool` says `lockfile`, not `registry`). A package declaring no license is skipped: absent metadata is not evidence of a permissive license.
+- **Not covered:** Cargo, Go, Maven, Bundler and NuGet, and reported as such. Their licenses are only obtainable one HTTP request per package, and a `Gemfile.lock` routinely holds 200 gems — doing that serially inside the analyzer's wall-clock budget would time the check out, which is a worse report than an honest *not covered*. Bounded-concurrency registry fetching → backlog.
 - **Tools:** today, registry JSON already fetched for SQG001. Planned: Trivy for high-level scanning, Syft for SBOM + detailed license mapping.
 
 ---
@@ -311,8 +315,8 @@ The `confidence_resolver` module centralizes this logic (one place to audit, uni
 | SQG001 | Dependency | Registry APIs (PyPI, npm, crates.io) | pypi, npm, crates | CERTAIN | ✓ |
 | SQG002 | Secrets | In-process regex + format validation | all text files | CERTAIN/HIGH | ✓ |
 | SQG003 | Placeholders | Regex | all text files | MEDIUM | ✗ |
-| SQG004 | CVE | OSV.dev HTTP API | pypi, npm, crates, go | HIGH | ✗ |
-| SQG005 | License | Registry license metadata | pypi, npm | HIGH/MEDIUM | ✗ |
+| SQG004 | CVE | OSV.dev HTTP API | pypi, npm, crates, go, maven, rubygems, packagist, nuget | HIGH | ✗ |
+| SQG005 | License | Registry license metadata; `composer.lock` declared licenses | pypi, npm, packagist | HIGH/MEDIUM | ✗ |
 | SQG006 | SAST | Regex sink detector | Python, JS/TS only | HIGH/MEDIUM | ✗ |
 | SQG007 | Typosquat | Edit distance vs curated list | pypi, npm | HIGH | ✗ |
 | SQG008 | AI scratchpad | **not implemented** | — | — | — |
