@@ -21,6 +21,7 @@ from app.analyzers.licenses import check_licenses
 from app.analyzers.placeholders import check_placeholders
 from app.analyzers.sast import check_sast
 from app.analyzers.secrets import check_secrets
+from app.analyzers.simplify import check_simplify
 from app.analyzers.typosquat import check_typosquat
 from app.analyzers.vulns import check_vulnerabilities
 from app.cache import cached_existence, cached_license, cached_osv_batch
@@ -208,6 +209,7 @@ async def run_scan(
         ("sast", "SQG006", lambda: check_sast(diff, repo_context)),
         ("licenses", "SQG005", lambda: check_licenses(diff, repo_context, fetch_file=fetch4, fetch_license=fetch_license)),
         ("typosquat", "SQG007", lambda: check_typosquat(diff, repo_context)),
+        ("simplify", "SQG009", lambda: check_simplify(diff, repo_context)),
     ]
     disabled = settings.disabled_analyzer_ids
     total = len(analyzers)

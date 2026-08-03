@@ -45,7 +45,7 @@ async def test_kill_switch_drops_a_disabled_analyzer(monkeypatch):
     rules = {f["rule_id"] for f in result["findings"]}
     assert "SQG002" not in rules  # disabled — the secret is not flagged
     assert "SQG003" in rules      # placeholder analyzer still runs
-    assert calls[0]["total"] == 7  # every rule is accounted for, disabled ones included
+    assert calls[0]["total"] == 8  # every rule is accounted for, disabled ones included
 
     # A disabled check must be reported as switched off, never as a silent pass —
     # otherwise turning off the secret scanner would make a repo look secret-free.
@@ -78,11 +78,11 @@ async def test_slow_analyzer_times_out_without_hanging_scan(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_findings_is_not_reported_as_clean_when_checks_could_not_run():
-    """A readme-only repo has nothing for 5 of the 7 checks to read.
+    """A readme-only repo has nothing for 6 of the 8 checks to read.
 
     The old behaviour called this "clean" because zero findings came back. It isn't:
-    the dependency, vulnerability, license, typosquat and SAST checks never looked at
-    anything, so the correct answer is "no problems found in what was scanned".
+    the dependency, vulnerability, license, typosquat, SAST and complexity checks never
+    looked at anything, so the correct answer is "no problems found in what was scanned".
     """
     files = {"README.md": "# My Project\n\nThis is a normal readme.\n"}
     result = await run_scan(files)
@@ -99,7 +99,8 @@ async def test_no_findings_is_not_reported_as_clean_when_checks_could_not_run():
     # These had nothing they can read, and say so instead of implying a pass.
     assert statuses["SQG001"] == "not_run_unsupported"
     assert statuses["SQG006"] == "not_run_unsupported"
-    assert result["coverage"]["rules_incomplete"] == 5
+    assert statuses["SQG009"] == "not_run_unsupported"  # no Python to build a tree from
+    assert result["coverage"]["rules_incomplete"] == 6
 
 
 @pytest.mark.asyncio
@@ -201,9 +202,9 @@ async def test_run_scan_emits_honest_phase_progress():
 
     await run_scan({"a.py": "x = 1\n"}, on_progress=cb)
 
-    assert len(calls) == 8  # 7 analyzers + reporting
-    assert [c["index"] for c in calls] == [0, 1, 2, 3, 4, 5, 6, 7]
-    assert all(c["total"] == 7 for c in calls)
+    assert len(calls) == 9  # 8 analyzers + reporting
+    assert [c["index"] for c in calls] == [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    assert all(c["total"] == 8 for c in calls)
     assert calls[0]["phase"] == "dependencies"
     assert calls[-1]["phase"] == "reporting"
     assert all(c["files_total"] == 1 for c in calls)

@@ -16,7 +16,9 @@ from app.db.models import AppSettings, AuditLog, Scan, WorkerHeartbeat
 from app.db.session import async_session
 
 # Settings validation contract, shared with settings_router.
-RULE_IDS = {"SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007"}
+# SQG008 is absent on purpose: it is specified (AI-scratchpad detection) but not built,
+# so accepting it in blocked_rules would let a user configure a check that never runs.
+RULE_IDS = {"SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007", "SQG009"}
 RETENTION_CHOICES = {30, 90, 365}
 # Stamped onto every completed scan so a stored result records which revision of the
 # rule set produced it — bump alongside analyzers.base.RULE_VERSION.

@@ -246,6 +246,13 @@ CAPABILITIES: Dict[str, RuleCapability] = {
         "SQG007", "Typosquatted packages",
         ecosystems=frozenset({"pypi", "npm"}),
     ),
+    "SQG009": RuleCapability(
+        "SQG009", "Avoidable complexity",
+        # Python only, and structurally so: the rewrite is produced by ast.unparse, so
+        # there is nothing to offer for a language with no parser here. A JS/TS repo must
+        # read `not_run_unsupported` rather than a clean bill of health it never earned.
+        languages=frozenset({"Python"}),
+    ),
 }
 
 

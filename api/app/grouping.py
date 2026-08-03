@@ -22,7 +22,7 @@ from app.analyzers.base import Confidence, Finding
 # Group only when a rule is genuinely repetitive across a codebase. A secret or a
 # hallucinated dependency is a discrete incident and must always stand alone, however
 # many there are — collapsing those would hide exactly what the reader came for.
-GROUPABLE_RULES = frozenset({"SQG003", "SQG006"})
+GROUPABLE_RULES = frozenset({"SQG003", "SQG006", "SQG009"})
 
 # Below this, a group costs more than a plain list of findings.
 MIN_GROUP_SIZE = 3
@@ -34,11 +34,15 @@ _CONFIDENCE_ORDER = {Confidence.CERTAIN: 0, Confidence.HIGH: 1, Confidence.MEDIU
 _LINE_SUFFIX = re.compile(r"\s+at line \d+:.*$", re.DOTALL)
 # Versioned package mentions ("lodash==4.17.20") vary per occurrence.
 _VERSION = re.compile(r"\b\d+\.\d+(?:\.\d+)?\b")
+# SQG009 opens with how many lines the rewrite saves ("5 lines can be 1: …"), which
+# differs between occurrences of the very same pattern — strip it so they cluster.
+_LINE_COUNT_PREFIX = re.compile(r"^\d+ lines can be 1: ")
 
 
 def issue_key(finding: Finding) -> str:
     """What makes two findings "the same issue" for grouping purposes."""
     label = _LINE_SUFFIX.sub("", finding.message).strip()
+    label = _LINE_COUNT_PREFIX.sub("", label)
     label = _VERSION.sub("<version>", label)
     # A shared advisory is a stronger signal than message text: the same CVE across
     # three manifests is one problem, however differently each line is worded.

@@ -21,6 +21,7 @@ from app.analyzers.vulns import check_vulnerabilities
 from app.analyzers.sast import check_sast
 from app.analyzers.licenses import check_licenses
 from app.analyzers.typosquat import check_typosquat
+from app.analyzers.simplify import check_simplify
 from app.cache import cached_existence, cached_license, cached_osv_batch
 from app.analyzers.base import finalize
 from app.checks import (
@@ -163,6 +164,7 @@ async def _run_pr_analysis(
         ("SQG006", lambda: check_sast(diff_text, repo_context)),
         ("SQG005", lambda: check_licenses(diff_text, repo_context, fetch_license=cached_license)),
         ("SQG007", lambda: check_typosquat(diff_text, repo_context)),
+        ("SQG009", lambda: check_simplify(diff_text, repo_context)),
     ]
     # Coverage over the files this PR touched, so the check run can say which rules
     # actually inspected the change instead of implying all of them did.
