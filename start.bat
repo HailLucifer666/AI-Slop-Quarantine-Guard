@@ -22,13 +22,15 @@ where wt >nul 2>&1
 if errorlevel 1 goto fallback
 
 REM One Windows Terminal window, three panes (single line on purpose).
-wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "npm run dev" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "set PYTHONPATH=.&&python -m uvicorn app.main:app --host 127.0.0.1 --port 8000" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "set PYTHONPATH=.&&python -m app.worker"
+REM Worker runs under run_worker_supervised.bat so a crash restarts instead of
+REM silently ending every future scan.
+wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "npm run dev" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "set PYTHONPATH=.&&python -m uvicorn app.main:app --host 127.0.0.1 --port 8000" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "run_worker_supervised.bat"
 goto open
 
 :fallback
 REM Windows Terminal not found - fall back to 3 separate windows.
 start "SQG API"    /D "%~dp0api" cmd /k "set PYTHONPATH=.&&python -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
-start "SQG Worker" /D "%~dp0api" cmd /k "set PYTHONPATH=.&&python -m app.worker"
+start "SQG Worker" /D "%~dp0api" cmd /k "run_worker_supervised.bat"
 start "SQG Web"    /D "%~dp0web" cmd /k "npm run dev"
 
 :open

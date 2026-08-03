@@ -45,7 +45,14 @@ async def test_kill_switch_drops_a_disabled_analyzer(monkeypatch):
     rules = {f["rule_id"] for f in result["findings"]}
     assert "SQG002" not in rules  # disabled — the secret is not flagged
     assert "SQG003" in rules      # placeholder analyzer still runs
-    assert calls[0]["total"] == 6  # one analyzer dropped from the 7-analyzer total
+    assert calls[0]["total"] == 7  # every rule is accounted for, disabled ones included
+
+    # A disabled check must be reported as switched off, never as a silent pass —
+    # otherwise turning off the secret scanner would make a repo look secret-free.
+    by_rule = {r["rule_id"]: r for r in result["coverage"]["rules"]}
+    assert by_rule["SQG002"]["status"] == "not_run_disabled"
+    assert result["coverage"]["clean"] is False
+    assert result["analytics"]["clean"] is False
 
 
 @pytest.mark.asyncio
@@ -70,13 +77,110 @@ async def test_slow_analyzer_times_out_without_hanging_scan(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_scan_clean_repo_has_no_findings():
+async def test_no_findings_is_not_reported_as_clean_when_checks_could_not_run():
+    """A readme-only repo has nothing for 5 of the 7 checks to read.
+
+    The old behaviour called this "clean" because zero findings came back. It isn't:
+    the dependency, vulnerability, license, typosquat and SAST checks never looked at
+    anything, so the correct answer is "no problems found in what was scanned".
+    """
     files = {"README.md": "# My Project\n\nThis is a normal readme.\n"}
     result = await run_scan(files)
 
     assert result["findings"] == []
-    assert result["analytics"]["clean"] is True
     assert result["analytics"]["total_findings"] == 0
+    assert result["analytics"]["clean"] is False
+    assert result["analytics"]["fully_covered"] is False
+
+    statuses = {r["rule_id"]: r["status"] for r in result["coverage"]["rules"]}
+    # Language-independent checks genuinely ran over the file.
+    assert statuses["SQG002"] == "ran"
+    assert statuses["SQG003"] == "ran"
+    # These had nothing they can read, and say so instead of implying a pass.
+    assert statuses["SQG001"] == "not_run_unsupported"
+    assert statuses["SQG006"] == "not_run_unsupported"
+    assert result["coverage"]["rules_incomplete"] == 5
+
+
+@pytest.mark.asyncio
+async def test_fully_covered_scan_reports_clean():
+    """When every check has something to read and finds nothing, clean is earned."""
+    # Exactly pinned, so the installed version is knowable without a lockfile.
+    files = {
+        "requirements.txt": "requests==2.32.3\n",
+        "app/main.py": "import requests\n\n\ndef go():\n    return requests.get('https://x')\n",
+    }
+
+    async def no_missing_packages(_ecosystem, _name, _client=None):
+        from app.registries import Existence
+        return Existence.EXISTS
+
+    async def no_vulns(pins, _client=None):
+        return {p: [] for p in pins}
+
+    async def permissive_license(_ecosystem, _name, _client=None):
+        return "MIT"
+
+    result = await run_scan(
+        files,
+        overrides={
+            "check_exists": no_missing_packages,
+            "query_batch": no_vulns,
+            "fetch_license": permissive_license,
+        },
+    )
+
+    assert result["findings"] == []
+    assert result["coverage"]["rules_incomplete"] == 0
+    assert result["analytics"]["fully_covered"] is True
+    assert result["analytics"]["clean"] is True
+
+
+@pytest.mark.asyncio
+async def test_range_specs_without_a_lockfile_are_reported_as_partial():
+    """npm's default `^1.2.3` cannot be resolved to an installed version without a
+    lockfile, so the vulnerability check must not present itself as complete."""
+    files = {"package.json": '{"dependencies": {"lodash": "^4.17.21"}}\n'}
+
+    async def unknown(_ecosystem, _name, _client=None):
+        from app.registries import Existence
+        return Existence.EXISTS
+
+    async def no_vulns(pins, _client=None):
+        return {p: [] for p in pins}
+
+    result = await run_scan(files, overrides={"check_exists": unknown, "query_batch": no_vulns})
+
+    sqg004 = next(r for r in result["coverage"]["rules"] if r["rule_id"] == "SQG004")
+    assert sqg004["status"] == "partial"
+    assert any("no lockfile" in nc for nc in sqg004["not_covered"])
+    assert result["analytics"]["clean"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_lockfile_resolves_the_ranges_and_restores_full_coverage():
+    files = {
+        "package.json": '{"dependencies": {"lodash": "^4.17.21"}}\n',
+        "package-lock.json": '{"lockfileVersion": 3, "packages": {}}\n',
+    }
+
+    async def exists(_ecosystem, _name, _client=None):
+        from app.registries import Existence
+        return Existence.EXISTS
+
+    async def no_vulns(pins, _client=None):
+        return {p: [] for p in pins}
+
+    async def mit(_ecosystem, _name, _client=None):
+        return "MIT"
+
+    result = await run_scan(
+        files,
+        overrides={"check_exists": exists, "query_batch": no_vulns, "fetch_license": mit},
+    )
+
+    sqg004 = next(r for r in result["coverage"]["rules"] if r["rule_id"] == "SQG004")
+    assert sqg004["status"] == "ran"
 
 
 @pytest.mark.asyncio

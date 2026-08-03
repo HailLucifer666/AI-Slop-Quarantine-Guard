@@ -48,9 +48,47 @@ def test_conclusion_never_failure_even_with_block_eligible():
 
 # --- format_check_run_summary -----------------------------------------------
 
-def test_summary_clean():
+def _coverage(ran: int, total: int) -> dict:
+    """Minimal coverage rollup shaped like app.coverage.summarize's output."""
+    rules = [
+        {
+            "rule_id": f"SQG00{i + 1}", "title": f"Check {i + 1}",
+            "status": "ran" if i < ran else "not_run_unsupported",
+            "engine": "builtin", "engine_version": "", "duration_ms": 1, "findings": 0,
+            "covered": ["Python (1 files)"] if i < ran else [],
+            "not_covered": [] if i < ran else ["Go (9 files)"],
+            "detail": "",
+        }
+        for i in range(total)
+    ]
+    return {
+        "rules_total": total, "rules_ran": ran, "rules_incomplete": total - ran,
+        "fully_covered": ran == total, "clean": ran == total, "rules": rules,
+    }
+
+
+def test_summary_clean_only_when_every_check_ran():
+    out = format_check_run_summary([], coverage=_coverage(ran=7, total=7))
+    assert "All 7 checks ran and found nothing" in out
+
+
+def test_summary_refuses_to_claim_all_clear_on_partial_coverage():
+    """The core honesty rule: unrun checks must never render as a clean pass."""
+    out = format_check_run_summary([], coverage=_coverage(ran=4, total=7))
+    assert "All clear" not in out
+    assert "4 of 7 checks ran" in out
+    assert "not a clean bill of health" in out
+    # And the reader is told which ones were skipped, and what they missed.
+    assert "not run — unsupported" in out
+    assert "Go (9 files)" in out
+
+
+def test_summary_without_coverage_does_not_assert_full_coverage():
+    """No coverage record means we state what we know, not that everything passed."""
     out = format_check_run_summary([])
-    assert "All clear" in out
+    assert "All clear" not in out
+    assert "No problems found" in out
+    assert "coverage was not recorded" in out
 
 
 def test_summary_lists_finding_with_location_and_fix():

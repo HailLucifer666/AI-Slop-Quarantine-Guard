@@ -36,7 +36,15 @@ from app.manifests import (
     parse_package_json,
 )
 
-from .base import Confidence, Evidence, Finding
+from .base import (
+    REMEDIATION_GUIDANCE,
+    REMEDIATION_PATCH,
+    Advisory,
+    Confidence,
+    Evidence,
+    Finding,
+    Remediation,
+)
 
 logger = logging.getLogger("analyzers.vulns")
 
@@ -55,9 +63,18 @@ _MAX_PINS = 2000     # safety cap on unique deps queried per scan (logged if exc
 # A (ecosystem, name, version) dependency pin.
 Pin = Tuple[str, str, str]
 
-# pip exact pin: name == version (ignores ~=, >=, extras, markers).
+# pip exact pin: name == version (ignores ~=, >=, extras). Allows the specific
+# trailing shapes pip itself supports on an exact pin — an environment marker
+# (`; python_version>="3.8"`) and/or one or more `--hash=` flags (hash-pinned
+# requirements — the security-conscious style — used to be invisible here since
+# the fully-anchored `$` rejected any trailing content at all. NOT a bare
+# unanchored match: "package==1.2.*" must still be rejected as a range, not an
+# exact pin, so only these specific trailing shapes are permitted.
 _PIP_PIN = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*([A-Za-z0-9][A-Za-z0-9.\-+]*)\s*$"
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*([A-Za-z0-9][A-Za-z0-9.\-+]*)"
+    r"\s*(?:;[^#]*)?"
+    r"(?:\s+--hash=\S+)*"
+    r"\s*\\?\s*$"
 )
 # A bare, exact semver — no range operators, no wildcard, no "latest".
 _EXACT_SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
@@ -179,12 +196,106 @@ def _find_lock_line(name: str, version: str, added: List[Tuple[int, str]]) -> Op
     return None
 
 
+def _fixed_versions(vulns: list) -> List[str]:
+    """Versions OSV names as the first patched release, in the order encountered.
+
+    Read strictly from OSV's ``affected[].ranges[].events[].fixed`` — the only place a
+    fixed version is authoritative. If OSV doesn't say, we don't either: no upper-bound
+    guessing, no "probably the next minor".
+    """
+    fixed: List[str] = []
+    for vuln in vulns:
+        for affected in vuln.get("affected") or []:
+            for rng in affected.get("ranges") or []:
+                for event in rng.get("events") or []:
+                    value = event.get("fixed")
+                    if value and value not in fixed:
+                        fixed.append(value)
+    return fixed
+
+
+def _severity_of(vulns: list) -> Optional[str]:
+    """Highest severity OSV reports, or None when OSV reports none.
+
+    Never computed from the advisory count or our own judgement — an absent severity is
+    reported as absent so nobody mistakes silence for "low".
+    """
+    ranking = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2, "MEDIUM": 2, "LOW": 3}
+    best: Optional[str] = None
+    for vuln in vulns:
+        label = (vuln.get("database_specific") or {}).get("severity")
+        if not isinstance(label, str):
+            continue
+        label = label.upper()
+        if label not in ranking:
+            continue
+        if best is None or ranking[label] < ranking[best]:
+            best = label
+    return best.lower() if best else None
+
+
+def _replacement_line(snippet: str, name: str, version: str, fixed: str) -> Optional[str]:
+    """The manifest line rewritten to the patched version, or None if not derivable.
+
+    Only a literal substitution of the version token inside the original line. If the
+    version string doesn't appear verbatim (lockfile layouts spread name and version
+    across lines), there is no honest one-line patch and we return None rather than
+    constructing a line the file never had.
+    """
+    if not snippet or version not in snippet:
+        return None
+    if name not in snippet:
+        return None
+    return snippet.replace(version, fixed, 1)
+
+
 def _vuln_finding(
-    name: str, version: str, vulns: list, path: str, line: int
+    name: str, version: str, vulns: list, path: str, line: int, snippet: Optional[str] = None
 ) -> Finding:
     ids = [v.get("id", "?") for v in vulns]
     shown = ", ".join(ids[:3]) + ("…" if len(ids) > 3 else "")
-    first = ids[0] if ids else ""
+    evidence_snippet = snippet.strip() if snippet else f"{name}=={version}"
+
+    advisories = [
+        Advisory(id=vuln_id, url=f"https://osv.dev/vulnerability/{vuln_id}")
+        for vuln_id in ids if vuln_id and vuln_id != "?"
+    ]
+    fixed = _fixed_versions(vulns)
+    # CVE aliases carried by GHSA entries, so a reader searching by CVE finds it.
+    cve_ids = sorted({
+        alias for vuln in vulns for alias in (vuln.get("aliases") or [])
+        if isinstance(alias, str) and alias.startswith("CVE-")
+    })
+    for cve in cve_ids:
+        if all(a.id != cve for a in advisories):
+            advisories.append(Advisory(id=cve, url=f"https://nvd.nist.gov/vuln/detail/{cve}"))
+
+    remediation: Optional[Remediation] = None
+    if fixed:
+        replacement = _replacement_line(evidence_snippet, name, version, fixed[0])
+        if replacement:
+            # A concrete, checkable rewrite: OSV named the version, and we only swapped
+            # that token in the line that is already there.
+            remediation = Remediation(
+                kind=REMEDIATION_PATCH,
+                text=f"Upgrade {name} to {fixed[0]}.",
+                suggested_replacement=replacement,
+                basis=f"OSV lists {fixed[0]} as a patched release for {ids[0] if ids else 'this advisory'}",
+            )
+        else:
+            remediation = Remediation(
+                kind=REMEDIATION_GUIDANCE,
+                text=f"Upgrade {name} to {fixed[0]} or later.",
+                basis="OSV names a patched version, but this file's layout has no single "
+                      "line to rewrite (lockfiles record the version separately)",
+            )
+    else:
+        remediation = Remediation(
+            kind=REMEDIATION_GUIDANCE,
+            text="Check the advisory for a patched release.",
+            basis="OSV does not name a fixed version for this advisory",
+        )
+
     return Finding(
         category="vulnerability",
         confidence=Confidence.HIGH,
@@ -193,14 +304,14 @@ def _vuln_finding(
         line_start=line,
         line_end=line,
         message=f"{name}=={version} has {len(vulns)} known advisory(ies): {shown}",
-        evidence=Evidence(snippet=f"{name}=={version}"),
+        evidence=Evidence(snippet=evidence_snippet),
         tool="osv",
         rule_id=RULE_ID,
-        fix_suggestion=(
-            f"Upgrade to a patched release; see https://osv.dev/vulnerability/{first}"
-            if first
-            else "Upgrade to a patched release."
-        ),
+        advisories=advisories,
+        severity=_severity_of(vulns),
+        fix_versions=fixed,
+        remediation=remediation,
+        fix_suggestion=remediation.text if remediation else None,
     )
 
 
@@ -279,5 +390,10 @@ async def check_vulnerabilities(
         vulns = results.get(pin)
         if vulns:  # non-empty list; None (outage) or [] (clean) → no finding
             _eco, name, version = pin
-            findings.append(_vuln_finding(name, version, vulns, path, line))
+            # The real added line, so a suggested upgrade rewrites what is actually
+            # in the file rather than a reconstruction of it.
+            snippet = next(
+                (text for ln, text in added_by_file.get(path, []) if ln == line), None
+            )
+            findings.append(_vuln_finding(name, version, vulns, path, line, snippet))
     return findings
