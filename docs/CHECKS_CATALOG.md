@@ -18,6 +18,7 @@
 > | SQG005 | PyPI / npm registry license metadata + `composer.lock` declared licenses (`analyzers/licenses.py`) | Trivy, Syft |
 > | SQG006 | Curated regex, Python + JavaScript only (`analyzers/sast.py`) | Semgrep |
 > | SQG007 | Edit distance against a curated popular-package list | — |
+> | SQG009 | Python `ast` rewrite detection (`analyzers/simplify.py`) | tree-sitter for JS/TS |
 >
 > Each check reports its own coverage at runtime (`api/app/coverage.py`), and a scan states
 > which engines are absent and what that costs (`api/app/engines.py`, `GET /api/health`). A
@@ -261,6 +262,66 @@ cross-check with download statistics. Findings stay advisory, which bounds the d
 Specified, never built. No code, no rule id in use. Documented so the intent isn't lost
 and so the number isn't accidentally reused.
 
+---
+
+## SQG009: Avoidable Complexity (code longer than it needs to be)
+
+| Aspect | Details |
+|---|---|
+| **Category** | Code maturity — verbosity, the most common form of AI slop |
+| **Tools** | **Today:** Python's own `ast`, in-process (`analyzers/simplify.py`). **Planned:** tree-sitter for JavaScript/TypeScript |
+| **Confidence** | **MEDIUM** (the rewrite is provable; whether to take it is a judgement) |
+| **Block-Eligible** | ✗ No — verbose code is not dangerous code |
+| **Message** | `"4 lines can be 1: loop searching for a match, then returning True is any()"` |
+
+### Why this is a Guard rule and not an opinion
+
+"This could be shorter" is a judgement, and the Guard does not ship judgement — that is
+the Crew's job (PRD §3). So the rule only fires when the shorter form is **derived from
+the syntax tree**, and it reports that form verbatim. Every finding therefore carries a
+one-liner a reviewer can read and commit. If the rewrite is not derivable, there is no
+finding. That is what keeps a style preference from being reported as a fact.
+
+### Shapes detected (each with its exact rewrite)
+
+| Original | Rewrite |
+|---|---|
+| `if c: return True` / `else: return False` | `return bool(c)` (or `return c` when `c` is already a comparison) |
+| `if c: x = a` / `else: x = b` | `x = a if c else b` |
+| `out = []` + a loop that only does `out.append(e)` | `out = [e for t in it]` (with the loop's `if` preserved) |
+| `total = 0` + a loop that only does `total += e` | `total = sum(e for t in it)`, or `sum(it)` when `e` is the loop variable |
+| a loop returning `True` on a match, then `return False` | `return any(c for t in it)` (and the mirrored form → `all(...)`) |
+| `if k in d: v = d[k]` / `else: v = default` | `v = d.get(k, default)` |
+| `try: v = d[k]` / `except KeyError: v = default` | `v = d.get(k, default)` |
+
+### False-Positive Controls
+
+- **Python only, structurally.** The rewrite comes from `ast.unparse`, so a language with
+  no parser here reports `not_run_unsupported` rather than a regex guess. JS/TS needs
+  tree-sitter — the same dependency SQG003 wants.
+- **Line count is the test.** Rewrites that do not reduce line count are excluded, even
+  correct ones. `len(x) == 0` → `not x` is one line either way, *and* on a NumPy array
+  the shorter form raises where the original worked — a rewrite that can change
+  behaviour is worse than none, so it is not offered.
+- **A comment inside the region withholds the patch.** Collapsing the lines would delete
+  a human's note, so the finding becomes guidance and no one-click suggestion is emitted.
+- **Width limits.** Past 100 characters the rewrite is reported but not offered as a
+  commit (it needs wrapping to fit); past 200 it is not reported at all. Fewer lines of
+  unreadable code is not a simplification. Both limits came from running the rule over
+  its own source, which proposed a 150-character ternary.
+- **Only what the change introduced.** A syntax tree needs the whole file, so the file is
+  fetched — but a finding is only reported when its region *starts* on an added line.
+- **`# noqa` / `# nosec` / `# keep`** on any line of the region suppress it.
+
+### Scope
+
+- **Covered:** Python. Measured on this repository — 4 findings across 54 Python files,
+  one offering a committable patch and three reported as guidance.
+- **Not covered:** every other language, reported as `not_run_unsupported`.
+- **Not attempted:** anything needing judgement — whether an abstraction earns its place,
+  whether a 40-line function is really a `groupby`, whether a wrapper is pointless. Those
+  are the Crew's (Phase 7), advisory, and must never be presented as facts.
+
 - **Would detect:** `<thinking>...</thinking>`, `<plan>...</plan>` blocks committed accidentally.
 - **Would be:** MEDIUM, advisory, **off by default**, gated to `.md` / `.txt` / `.py` to
   avoid flagging legitimate XML/HTML.
@@ -320,6 +381,7 @@ The `confidence_resolver` module centralizes this logic (one place to audit, uni
 | SQG006 | SAST | Regex sink detector | Python, JS/TS only | HIGH/MEDIUM | ✗ |
 | SQG007 | Typosquat | Edit distance vs curated list | pypi, npm | HIGH | ✗ |
 | SQG008 | AI scratchpad | **not implemented** | — | — | — |
+| SQG009 | Complexity | Python `ast` | Python only | MEDIUM | ✗ |
 
 ---
 
