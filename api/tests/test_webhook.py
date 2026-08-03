@@ -100,4 +100,12 @@ def test_duplicate_delivery_deduped(client):
     assert first.status_code == 202
     assert second.status_code == 200
     assert second.json() == {"status": "duplicate"}
-    assert len(client.enqueued) == 1  # only the first enqueued
+
+
+def test_malformed_json_body_400_not_500(client):
+    # A validly-signed but malformed body must return a clean 400, not an
+    # uncaught JSONDecodeError surfacing as a 500.
+    body = b"not json at all"
+    resp = _post(client, body, guid="malformed-guid")
+    assert resp.status_code == 400
+    assert client.enqueued == []

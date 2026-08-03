@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import main, store
+from app.config import settings
 from app.db.models import Base
 
 COMPLETE = {
@@ -60,3 +61,11 @@ async def test_audit_http_route_shape(env):
     entry = next(e for e in body["audit"] if e["action"] == "scan.created")
     assert entry["details"]["scan_id"] == sid
     assert set(entry) == {"id", "action", "details", "created_at"}
+
+
+@pytest.mark.asyncio
+async def test_audit_requires_api_key_when_configured(env, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", "s3cr3t")
+    assert (await env.get("/api/audit")).status_code == 401
+    resp = await env.get("/api/audit", headers={"X-API-Key": "s3cr3t"})
+    assert resp.status_code == 200

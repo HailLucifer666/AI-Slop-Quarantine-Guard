@@ -34,7 +34,8 @@ def test_edit_distance_within_bound():
 def test_closest_popular_guards():
     assert _closest_popular("pypi", "reqests") == "requests"   # 1 edit away
     assert _closest_popular("pypi", "requests") is None        # it IS the real one
-    assert _closest_popular("pypi", "flsk") is None            # too short (< MIN_LEN)
+    assert _closest_popular("pypi", "flsk") == "flask"         # short squat, still caught
+    assert _closest_popular("pypi", "yz") is None               # below MIN_LEN entirely
     assert _closest_popular("pypi", "my-internal-helper") is None  # nowhere near
     assert _closest_popular("crates", "reqests") is None       # no list for ecosystem
 
@@ -70,11 +71,24 @@ async def test_real_popular_package_not_flagged():
 
 
 @pytest.mark.asyncio
-async def test_short_and_unrelated_names_not_flagged():
-    content = "flsk==1.0.0\nmy-internal-helper==0.1.0\n"
-    diff = _diff("requirements.txt", ["flsk==1.0.0", "my-internal-helper==0.1.0"])
+async def test_unrelated_name_not_flagged():
+    content = "my-internal-helper==0.1.0\n"
+    diff = _diff("requirements.txt", ["my-internal-helper==0.1.0"])
     findings = await check_typosquat(diff, _ctx({"requirements.txt": content}))
-    assert findings == []  # short name + unrelated name both safe
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_short_squat_now_flagged():
+    # A short squat ("flsk" vs "flask") must not evade detection just by staying
+    # under the old flat length floor — an attacker who knows that rule could
+    # trivially bypass it by keeping the name short.
+    content = "flsk==1.0.0\n"
+    diff = _diff("requirements.txt", ["flsk==1.0.0"])
+    findings = await check_typosquat(diff, _ctx({"requirements.txt": content}))
+    assert len(findings) == 1
+    assert "flask" in findings[0].message
+    assert findings[0].block_eligible is False
 
 
 @pytest.mark.asyncio

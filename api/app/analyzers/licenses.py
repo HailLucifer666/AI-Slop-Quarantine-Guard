@@ -98,6 +98,18 @@ async def fetch_license(
     return _npm_license_text(data)
 
 
+def _name_present(name: str, added: list[tuple[int, str]]) -> Optional[int]:
+    """First added line where `name` appears as a whole token (mirrors SQG001).
+    A bare substring test would match e.g. npm "ms" or PyPI "six" inside an
+    unrelated word, running the license check against a package the PR never
+    actually touched."""
+    pattern = re.compile(rf"(?<![\w@/.-]){re.escape(name)}(?![\w.-])")
+    for line, content in added:
+        if pattern.search(content):
+            return line
+    return None
+
+
 def _finding(name: str, license_label: str, match: str, path: str, line: int) -> Finding:
     return Finding(
         category="license",
@@ -146,10 +158,9 @@ async def check_licenses(
             content = await fetch_file(repo, path, head_sha, token)
             if content is None:
                 continue  # unfetchable manifest → silent (protects zero-FP)
-            added_text = "\n".join(text for _, text in added)
             for name in extract_dependency_names(path, content):
-                line = next((ln for ln, text in added if name in text), None)
-                if line is None or name not in added_text:
+                line = _name_present(name, added)
+                if line is None:
                     continue  # not introduced by this PR
                 label = await fetch_license(ecosystem, name, client)
                 if not label:

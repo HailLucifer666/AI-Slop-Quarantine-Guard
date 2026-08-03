@@ -49,6 +49,37 @@ async def test_pip_pinned_vuln_flagged():
 
 
 @pytest.mark.asyncio
+async def test_hash_pinned_vuln_still_flagged():
+    # pip's own hash-pinning convention (--hash=...) used to make the fully-anchored
+    # regex miss the pin entirely — exactly the security-conscious style that most
+    # needs OSV coverage.
+    line = "requests==2.19.0 --hash=sha256:abc123def456"
+    diff = _diff("requirements.txt", [line])
+    ctx, kw = _ctx({"requirements.txt": line + "\n"}, vulns=[{"id": "GHSA-xxxx"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    assert "GHSA-xxxx" in findings[0].message
+
+
+@pytest.mark.asyncio
+async def test_marker_suffixed_vuln_still_flagged():
+    line = 'requests==2.19.0; python_version>="3.8"'
+    diff = _diff("requirements.txt", [line])
+    ctx, kw = _ctx({"requirements.txt": line + "\n"}, vulns=[{"id": "GHSA-xxxx"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_wildcard_version_still_not_treated_as_exact_pin():
+    # "1.2.*" is a range, not an exact pin — must not be misread as pinned to "1.2".
+    diff = _diff("requirements.txt", ["requests==1.2.*"])
+    ctx, kw = _ctx({"requirements.txt": "requests==1.2.*\n"}, vulns=[{"id": "GHSA-xxxx"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert findings == []
+
+
+@pytest.mark.asyncio
 async def test_npm_exact_vuln_flagged():
     diff = _diff("package.json", ['    "lodash": "4.17.4",'])
     content = '{"dependencies": {"lodash": "4.17.4"}}'

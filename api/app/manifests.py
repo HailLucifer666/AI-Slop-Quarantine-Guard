@@ -37,6 +37,8 @@ def manifest_ecosystem(filename: str) -> str | None:
 
 def _is_non_registry(spec: str) -> bool:
     spec = spec.strip().strip('"').strip("'")
+    if " @ " in spec:  # PEP 508 direct reference, e.g. "name @ https://..." — never a registry lookup
+        return True
     return any(spec.startswith(p) for p in _NON_REGISTRY_PREFIXES)
 
 
@@ -109,6 +111,34 @@ def parse_cargo_toml(content: str) -> Dict[str, str]:
             else:
                 deps[name] = str(spec)
     return deps
+
+
+# pip directive that declares a non-public package index. Lives as its own line
+# in requirements.txt (`--extra-index-url https://...` / `--index-url https://...`
+# / their `-i`/`-e` short forms — note `-e` here is pip's *editable install* flag,
+# unrelated to `--extra-index-url`'s short form `-i`). A hit means SOME dependency
+# in this specific file may resolve from a private index the public registry has
+# never heard of — existence-checking against the public registry alone would
+# false-block a real package, so callers downgrade MISSING to advisory for this
+# file rather than treating it as a proven fact.
+_PIP_INDEX_DIRECTIVE = re.compile(r"^\s*(?:--extra-index-url|--index-url|-i)\b", re.IGNORECASE)
+
+
+def has_pip_extra_index(content: str) -> bool:
+    """True if a requirements.txt declares a custom package index."""
+    return any(_PIP_INDEX_DIRECTIVE.match(line) for line in content.splitlines())
+
+
+# .npmrc scope→registry override, e.g. "@myorg:registry=https://npm.myorg.com".
+# Declaring this tells npm that names under "@myorg/*" resolve from that registry,
+# not the public one — the same false-block risk as the pip case above, but
+# precisely scoped to the declared scope(s) rather than the whole ecosystem.
+_NPMRC_SCOPE_RE = re.compile(r"^\s*(@[a-z0-9][a-z0-9._-]*):registry\s*=", re.IGNORECASE | re.MULTILINE)
+
+
+def npmrc_private_scopes(content: str) -> set[str]:
+    """Scopes (e.g. {"@myorg"}) an .npmrc redirects to a non-public registry."""
+    return {m.group(1) for m in _NPMRC_SCOPE_RE.finditer(content)}
 
 
 def extract_dependency_names(filename: str, content: str) -> List[str]:

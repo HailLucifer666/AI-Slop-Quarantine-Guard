@@ -115,6 +115,29 @@ def test_read_zip_bad_archive_raises():
         read_zip(b"not a zip")
 
 
+def test_read_zip_oversized_entry_skipped_and_recorded(monkeypatch):
+    monkeypatch.setattr(ingest, "MAX_FILE_BYTES", 10)
+    data = _zip({"big.py": "x" * 50})
+    files, skipped = read_zip(data)
+    assert "big.py" not in files
+    assert any("big.py" in s for s in skipped)  # never silently dropped
+
+
+def test_read_entry_capped_aborts_on_real_bytes_read_not_declared_size():
+    """_read_entry_capped streams and counts actual decompressed bytes as they
+    arrive — it never reads `info.file_size` at all — so it cannot be fooled by
+    a mismatch between a zip's declared size metadata and its real content,
+    unlike a check that inspects `info.file_size` once and then reads everything
+    in a single all-at-once `zf.read()` call."""
+    data = _zip({"big.py": "x" * 1_000_000})
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    info = zf.infolist()[0]
+
+    assert ingest._read_entry_capped(zf, info, cap=10) is None  # aborted, well under 1MB read
+    raw = ingest._read_entry_capped(zf, info, cap=2_000_000)
+    assert raw == b"x" * 1_000_000  # a real, under-cap entry still reads fully and correctly
+
+
 # --- validate_clone_url -----------------------------------------------------
 
 def test_clone_url_accepts_public_https_forge():

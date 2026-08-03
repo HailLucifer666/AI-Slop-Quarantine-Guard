@@ -46,6 +46,40 @@ def inside_string_literal(line: str, index: int, lang: str = "generic") -> bool:
     return quote is not None
 
 
+def inside_block_comment(line: str, index: int, lang: str = "generic") -> bool:
+    """True if ``index`` sits inside a ``/* ... */`` span that starts AND ends on
+    this line (single-line MVP scope, like the rest of this module — a block
+    comment spanning multiple lines isn't tracked). Without this, a sink
+    mentioned in a self-contained one-line block comment (e.g. an old approach
+    left as documentation) reads as a live call site.
+
+    Only meaningful for ``lang in ("js", "generic")`` — Python has no ``/* */``.
+    """
+    if lang == "python":
+        return False
+    quote = None
+    n = len(line)
+    i = 0
+    while i < n:
+        c = line[i]
+        if quote is not None:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in ('"', "'") or (lang == "js" and c == "`"):
+            quote = c
+        elif c == "/" and i + 1 < n and line[i + 1] == "*":
+            end = line.find("*/", i + 2)
+            if end == -1:
+                return False  # unterminated on this line — not self-contained, don't guess
+            if i <= index < end + 2:
+                return True
+            i = end + 1
+        i += 1
+    return False
+
+
 def comment_start(line: str, lang: str = "generic") -> int:
     """Index where an inline comment begins (``#`` for python, ``//`` for js), or -1.
 

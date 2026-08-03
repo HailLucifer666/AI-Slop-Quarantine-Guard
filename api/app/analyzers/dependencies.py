@@ -18,7 +18,12 @@ import httpx
 
 from app import github_client
 from app.diff import parse_diff
-from app.manifests import extract_dependency_names, manifest_ecosystem
+from app.manifests import (
+    extract_dependency_names,
+    has_pip_extra_index,
+    manifest_ecosystem,
+    npmrc_private_scopes,
+)
 from app.registries import Existence, check_exists
 
 from .base import Confidence, Evidence, Finding
@@ -74,6 +79,28 @@ def _unknown_finding(name: str, ecosystem: str, path: str, line: int, snippet: s
     )
 
 
+def _private_index_finding(name: str, ecosystem: str, path: str, line: int, snippet: str) -> Finding:
+    """A public-registry 404 that ISN'T proof of a hallucinated package: this repo
+    declares a private/custom index, so the name may be a real internal package the
+    public registry has simply never heard of. Advisory only — never block on an
+    absence we can't actually prove (G3)."""
+    return Finding(
+        category="dependency",
+        confidence=Confidence.HIGH,
+        block_eligible=False,
+        file_path=path,
+        line_start=line,
+        line_end=line,
+        message=(
+            f"'{name}' was not found on the public {ecosystem} registry, but this project "
+            f"declares a private/custom index — it may be a real internal package. Advisory only."
+        ),
+        evidence=Evidence(snippet=snippet.strip()),
+        tool=f"registry:{ecosystem}",
+        rule_id=RULE_ID,
+    )
+
+
 async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
     """Flag hallucinated dependencies added in this PR.
 
@@ -95,6 +122,7 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
     exists_fn = repo_context.get("check_exists", check_exists)
 
     findings: List[Finding] = []
+    npmrc_scopes: Optional[set[str]] = None  # lazy, fetched at most once per scan
     async with httpx.AsyncClient(timeout=10) as client:
         for path, added in added_by_file.items():
             ecosystem = manifest_ecosystem(path)
@@ -104,6 +132,14 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
             content = await fetch_file(path)
             if not content:
                 continue  # can't parse → stay silent (protects zero-FP bar)
+
+            # A repo-declared private index means a public-registry 404 is NOT proof
+            # of a hallucinated package (see manifests.has_pip_extra_index/
+            # npmrc_private_scopes) — never block on an absence we can't prove (G3).
+            pip_private = ecosystem == "pypi" and has_pip_extra_index(content)
+            if ecosystem == "npm" and npmrc_scopes is None:
+                npmrc_content = await fetch_file(".npmrc")
+                npmrc_scopes = npmrc_private_scopes(npmrc_content) if npmrc_content else set()
 
             seen: set[str] = set()
             for name in extract_dependency_names(path, content):
@@ -117,7 +153,15 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
                 snippet = next(c for ln, c in added if ln == line)
                 result = await exists_fn(ecosystem, name, client)
                 if result is Existence.MISSING:
-                    findings.append(_missing_finding(name, ecosystem, path, line, snippet))
+                    is_private = pip_private or (
+                        ecosystem == "npm"
+                        and npmrc_scopes
+                        and any(name.startswith(f"{scope}/") for scope in npmrc_scopes)
+                    )
+                    if is_private:
+                        findings.append(_private_index_finding(name, ecosystem, path, line, snippet))
+                    else:
+                        findings.append(_missing_finding(name, ecosystem, path, line, snippet))
                 elif result is Existence.UNKNOWN:
                     findings.append(_unknown_finding(name, ecosystem, path, line, snippet))
 

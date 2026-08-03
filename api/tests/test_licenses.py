@@ -98,6 +98,17 @@ async def test_dep_not_on_added_line_skipped():
 
 
 @pytest.mark.asyncio
+async def test_short_name_inside_unrelated_word_not_flagged():
+    # A bare substring test would match npm "ms" inside "milliseconds" and wrongly
+    # treat the copyleft "ms" package as touched by this PR when it wasn't.
+    diff = _diff("package.json", ["  // cache for milliseconds precision"])
+    content = '{"dependencies": {"ms": "2.1.2", "other": "1.0.0"}}'
+    ctx, kw = _ctx({"package.json": content}, {"ms": "GPL-3.0", "other": "MIT"})
+    findings = await check_licenses(diff, ctx, **kw)
+    assert findings == []
+
+
+@pytest.mark.asyncio
 async def test_unfetchable_manifest_silent():
     diff = _diff("requirements.txt", ["lib==1.0"])
     ctx, kw = _ctx({}, {"lib": "GPL-3.0"})  # fetch returns None

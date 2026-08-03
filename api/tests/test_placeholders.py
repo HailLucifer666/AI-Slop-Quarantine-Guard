@@ -23,6 +23,40 @@ async def test_todo_flagged():
 
 
 @pytest.mark.asyncio
+async def test_lowercase_todo_flagged():
+    # Lowercase is just as real a marker as uppercase — must not be silently missed.
+    findings = await check_placeholders(_diff("app/auth.py", ["    # todo: implement hashing"]), {})
+    assert len(findings) == 1
+    assert findings[0].rule_id == "SQG003"
+
+
+@pytest.mark.asyncio
+async def test_lowercase_fixme_flagged():
+    findings = await check_placeholders(_diff("app/auth.py", ["    // fixme later"]), {})
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_xxx_ticket_id_not_flagged():
+    # "XXX-1234" is a ticket-ID prefix (Jira-style), not a placeholder marker.
+    findings = await check_placeholders(_diff("app/auth.py", ["    // see XXX-1234 for context"]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_xxx_masked_value_not_flagged():
+    # Outside a string literal too (the doc's mask format), not just the marker itself.
+    findings = await check_placeholders(_diff("app/auth.py", ["    # expected format: XXX-XX-XXXX"]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_bare_xxx_marker_still_flagged():
+    findings = await check_placeholders(_diff("app/auth.py", ["    # XXX: this is fragile"]), {})
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
 async def test_not_implemented_flagged():
     findings = await check_placeholders(_diff("svc.py", ["    raise NotImplementedError"]), {})
     assert len(findings) == 1

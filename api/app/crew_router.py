@@ -6,14 +6,15 @@ unavailable (no key / provider down) so the UI can say so without breaking.
 Advisory only: this endpoint never mutates a scan or its conclusions.
 """
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api_security import rate_limit, require_api_key
 from app.crew.explainer import explain_finding
 
 router = APIRouter(prefix="/api/crew", tags=["crew"])
 
 
-@router.post("/explain")
+@router.post("/explain", dependencies=[Depends(require_api_key), Depends(rate_limit)])
 async def explain(request: Request):
     try:
         finding = await request.json()

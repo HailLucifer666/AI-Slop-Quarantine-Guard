@@ -55,6 +55,7 @@ _ALLOWLIST = (
 _CERTAIN_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("AWS access key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36}\b")),
+    ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
     ("Stripe live secret key", re.compile(r"\bsk_live_[A-Za-z0-9]{24,}\b")),
     ("Slack token", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
@@ -93,6 +94,18 @@ _EXAMPLE_PATH = re.compile(
 _ASSIGNMENT = re.compile(
     r"""(?P<name>\b\w*(?:secret|token|passwd|password|pwd|api[_-]?key|access[_-]?key)\w*\b)"""
     r"""\s*[:=]\s*['"](?P<value>[^'"]{8,})['"]""",
+    re.IGNORECASE,
+)
+
+# .env files (dotenv format) use bare KEY=value with no quotes — _ASSIGNMENT above
+# never matches that shape, so a real hardcoded secret there was invisible. Scoped
+# strictly to .env* paths: applying an unquoted match to ordinary source code would
+# flag variable-to-variable/function-call assignments (`password = get_password()`)
+# as if they were hardcoded literals.
+_DOTENV_PATH = re.compile(r"(?:^|/)\.env(?:\.[^/]*)?$", re.IGNORECASE)
+_ASSIGNMENT_UNQUOTED = re.compile(
+    r"""^\s*(?P<name>\w*(?:secret|token|passwd|password|pwd|api[_-]?key|access[_-]?key)\w*)"""
+    r"""\s*=\s*(?P<value>\S{8,})\s*$""",
     re.IGNORECASE,
 )
 
@@ -152,6 +165,19 @@ def _looks_nonsecret_value(value: str) -> bool:
 def _is_allowlisted(line: str) -> bool:
     low = line.lower()
     return any(token in low for token in _ALLOWLIST)
+
+
+# How far either side of a match the allowlist/placeholder checks look. Scoped to
+# a window around the match — NOT the whole line — so a real secret sharing a line
+# with an unrelated mention of `os.environ`/an ellipsis (e.g. in a trailing comment)
+# isn't silently dropped or downgraded. A real placeholder/allowlist marker for a
+# given credential sits right next to it (the value itself, or an inline comment
+# immediately before/after); an unrelated one elsewhere on a long line does not.
+_MATCH_WINDOW = 20
+
+
+def _window(content: str, start: int, end: int) -> str:
+    return content[max(0, start - _MATCH_WINDOW):end + _MATCH_WINDOW]
 
 
 def _redact(secret: str) -> str:
@@ -270,14 +296,14 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
         in_test = bool(_TEST_PATH.search(path))
         in_example = bool(_EXAMPLE_PATH.search(path))
         for idx, (line, content) in enumerate(added):
-            if _is_allowlisted(content):
-                continue
-
             matched = False
             for label, pattern in _CERTAIN_PATTERNS:
                 m = pattern.search(content)
                 if not m:
                     continue
+                if _is_allowlisted(_window(content, m.start(), m.end())):
+                    matched = True  # a real match existed here; don't also fall through to the generic tier
+                    break
                 # A private-key header with no key body following it is illustrative
                 # (a detection pattern in a doc), never a real key → advisory, not block.
                 if label == "private key block" and not _has_key_body(added, idx):
@@ -286,7 +312,7 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                     finding = _certain_in_test(label, m.group(0), path, line)
                 elif in_example:
                     finding = _advisory(label, m.group(0), path, line, "in an example/template file")
-                elif _looks_placeholder(content):
+                elif _looks_placeholder(_window(content, m.start(), m.end())):
                     finding = _advisory(label, m.group(0), path, line, "(placeholder, not a real key)")
                 else:
                     finding = _certain(label, m.group(0), path, line)
@@ -296,13 +322,17 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
             if matched:
                 continue  # one finding per line; CERTAIN wins over HIGH
 
-            a = _ASSIGNMENT.search(content)
+            a = _ASSIGNMENT.search(content) or (
+                _ASSIGNMENT_UNQUOTED.search(content) if _DOTENV_PATH.search(path) else None
+            )
             if a:
                 # Generic credential-named assignments are FP-prone. Skip them in
-                # test/example/doc/compose paths (fixtures, not leaks), and skip values
-                # that provably aren't secrets (URLs, env refs, markers, enums, masks).
-                # Distinctive CERTAIN tokens are matched above and unaffected.
+                # test/example/doc/compose paths (fixtures, not leaks), values that
+                # provably aren't secrets (URLs, env refs, markers, enums, masks), or
+                # an allowlist marker near THIS assignment (not just anywhere on the line).
                 if in_test or in_example or _looks_nonsecret_value(a.group("value")):
+                    continue
+                if _is_allowlisted(_window(content, a.start(), a.end())):
                     continue
                 findings.append(_high(a.group("name"), a.group("value"), path, line))
     return findings

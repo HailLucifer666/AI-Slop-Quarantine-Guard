@@ -77,6 +77,75 @@ async def test_hallucinated_scoped_npm_flagged():
     assert findings[0].confidence is Confidence.CERTAIN
 
 
+# --- private-registry false-block guard -----------------------------------
+
+@pytest.mark.asyncio
+async def test_pip_extra_index_downgrades_missing_to_advisory():
+    # A public-registry 404 is NOT proof of a hallucination when the file itself
+    # declares a private index — the name may be a real internal package.
+    content = "--extra-index-url https://pypi.mycompany.com/simple\nmycompany-internal-tool==1.0.0\n"
+    files = {"requirements.txt": content}
+    diff = (
+        "--- a/requirements.txt\n+++ b/requirements.txt\n@@ -0,0 +1,2 @@\n"
+        "+--extra-index-url https://pypi.mycompany.com/simple\n"
+        "+mycompany-internal-tool==1.0.0\n"
+    )
+    ctx = _ctx(files, {"mycompany-internal-tool": Existence.MISSING})
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+    assert "private" in findings[0].message.lower()
+
+
+@pytest.mark.asyncio
+async def test_npmrc_scope_downgrades_missing_to_advisory():
+    files = {
+        "package.json": '{"dependencies": {"@myorg/internal-tool": "^1.0.0"}}',
+        ".npmrc": "@myorg:registry=https://npm.mycompany.com/\n",
+    }
+    diff = (
+        "--- a/package.json\n+++ b/package.json\n@@ -0,0 +1,1 @@\n"
+        '+  "dependencies": {"@myorg/internal-tool": "^1.0.0"}\n'
+    )
+    ctx = _ctx(files, {"@myorg/internal-tool": Existence.MISSING})
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_npmrc_scope_does_not_shield_unscoped_hallucination():
+    # A private scope for @myorg must not blanket-downgrade an unrelated,
+    # unscoped hallucinated package in the same file.
+    files = {
+        "package.json": (
+            '{"dependencies": {"@myorg/internal-tool": "^1.0.0", '
+            '"quantumllm-helper": "^1.0.0"}}'
+        ),
+        ".npmrc": "@myorg:registry=https://npm.mycompany.com/\n",
+    }
+    diff = (
+        "--- a/package.json\n+++ b/package.json\n@@ -0,0 +1,2 @@\n"
+        '+  "@myorg/internal-tool": "^1.0.0",\n'
+        '+  "quantumllm-helper": "^1.0.0"\n'
+    )
+    ctx = _ctx(files, {
+        "@myorg/internal-tool": Existence.MISSING,
+        "quantumllm-helper": Existence.MISSING,
+    })
+    findings = await check_dependencies(diff, ctx)
+
+    by_name = {f.message: f for f in findings}
+    scoped = next(f for msg, f in by_name.items() if "@myorg/internal-tool" in msg)
+    unscoped = next(f for msg, f in by_name.items() if "quantumllm-helper" in msg)
+    assert scoped.confidence is Confidence.HIGH and scoped.block_eligible is False
+    assert unscoped.confidence is Confidence.CERTAIN and unscoped.block_eligible is True
+
+
 # --- negative set (zero false positives) ---------------------------------
 
 @pytest.mark.asyncio

@@ -33,7 +33,14 @@ _ALLOWLIST = ("# noqa", "# type: ignore", "# pragma: no cover")
 
 # (label, pattern). First match per line wins; order = priority.
 _PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("TODO/FIXME marker", re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")),
+    (
+        "TODO/FIXME marker",
+        # Case-insensitive: lowercase "todo"/"fixme" comments are just as real a
+        # signal as uppercase ones. XXX excludes a following "-<digit-or-X>" — that
+        # shape is a ticket-ID prefix (XXX-1234) or a masked value (XXX-XX-XXXX),
+        # not a placeholder marker.
+        re.compile(r"\b(?:TODO|FIXME|HACK)\b|\bXXX\b(?!-[\dXx])", re.IGNORECASE),
+    ),
     (
         "not-implemented stub",
         # Only a genuine empty stub / explicit admission — NOT every NotImplementedError.
