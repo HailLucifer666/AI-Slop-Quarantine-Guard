@@ -63,3 +63,8 @@ Dashbaord Design.md.txt
 CLAUDE.md
 Instructions.md
 GIT Dashboard UI.png
+
+# Coverage artifacts (pytest-cov output) — regenerated on every run.
+.coverage
+coverage.xml
+htmlcov/
