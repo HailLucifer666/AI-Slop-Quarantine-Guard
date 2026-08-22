@@ -144,13 +144,20 @@ export interface Analytics {
   top_files: TopFile[]
   files_scanned: number
   files_skipped: number
-  /** Every check ran AND found nothing. NOT the same as `total_findings === 0` — a scan
-   * where three checks could not run is inconclusive, not clean. */
+  /** Excluded by the SCANNED repository's own .gitignore/.dockerignore directory rules.
+   * Separate from files_skipped because the cause differs: that is our size/type caps,
+   * this is the repo's own rules. Both mean "not read". */
+  files_suppressed: number
+  /** Every check ran, found nothing, AND every file was actually read. NOT the same as
+   * `total_findings === 0` — a scan where three checks could not run, or where files
+   * went unread, is inconclusive, not clean. */
   clean: boolean
   fully_covered: boolean
   rules_ran: number
   rules_total: number
   rules_incomplete: number
+  /** files_skipped + files_suppressed. Any value > 0 forces clean/fully_covered false. */
+  unexamined_files: number
 }
 
 /** Live phase progress while a scan runs (cleared on finish). Honest: real phase
@@ -179,6 +186,7 @@ export interface ScanSummary {
   groups: FindingGroups | null
   progress: ScanProgress | null
   skipped: string[]
+  suppressed: string[]
   created_at: string | null
   completed_at: string | null
   heartbeat_at: string | null

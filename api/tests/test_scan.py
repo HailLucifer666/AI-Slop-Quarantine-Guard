@@ -235,3 +235,53 @@ def test_aggregate_counts_by_rule_confidence_and_file():
     assert a["block_eligible"] == 1
     assert a["top_files"][0] == {"file_path": "a.py", "count": 2}
     assert a["clean"] is False
+
+
+# --- a scanned repo must not be able to edit its own report -----------------------
+
+
+@pytest.mark.asyncio
+async def test_secret_behind_a_repo_gitignore_is_still_reported(tmp_path):
+    """The F1 end-to-end proof, and the tightest statement of the product promise.
+
+    Before the fix, adding one line to the scanned repository's own .gitignore took a
+    committed, format-valid AWS access key id from SQG002=1 to SQG002=0 — with
+    files_skipped still reporting 0, so nothing told the user anything had been withheld.
+    """
+    from app.ingest import walk_dir
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "credentials.py").write_text(
+        'AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7REALKEY"\n', encoding="utf-8"
+    )
+    (tmp_path / ".gitignore").write_text("credentials.py\n", encoding="utf-8")
+
+    ingested = walk_dir(str(tmp_path))
+    result = await run_scan(
+        ingested.files, ingested.skipped, suppressed=ingested.suppressed,
+    )
+
+    assert result["analytics"]["by_rule"].get("SQG002") == 1
+
+
+@pytest.mark.asyncio
+async def test_unexamined_files_disqualify_a_clean_verdict():
+    """The class fix, not just the F1 instance.
+
+    A file we did not read is a gap whatever the reason — the repo's ignore rules, or
+    our own size/count caps. `clean` previously derived from rule statuses alone, so a
+    cap-skipped file sat happily beside "All clear".
+    """
+    files = {"app/util.py": "def add(a, b):\n    return a + b\n"}
+
+    baseline = await run_scan(files)
+    with_skip = await run_scan(files, ["huge.bin (exceeds 1024KB file cap)"])
+    with_suppression = await run_scan(files, suppressed=["build/ (repo .gitignore)"])
+
+    # Whatever the baseline concludes, an unexamined file must remove the clean claim.
+    assert with_skip["analytics"]["clean"] is False
+    assert with_suppression["analytics"]["clean"] is False
+    assert with_skip["analytics"]["fully_covered"] is False
+    assert with_suppression["analytics"]["fully_covered"] is False
+    assert with_suppression["analytics"]["files_suppressed"] == 1
+    assert baseline["analytics"]["files_suppressed"] == 0

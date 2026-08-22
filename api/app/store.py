@@ -221,6 +221,7 @@ async def complete_scan(scan_id: int, result: dict) -> None:
         scan.analytics_json = json.dumps(analytics)
         scan.findings_json = json.dumps(result.get("findings", []))
         scan.skipped_json = json.dumps(result.get("skipped", []))
+        scan.suppressed_json = json.dumps(result.get("suppressed", []))
         coverage = result.get("coverage")
         scan.coverage_json = json.dumps(coverage) if coverage else None
         groups = result.get("groups")
@@ -289,6 +290,7 @@ def _row_to_dict(scan: Scan, *, include_findings: bool = False) -> dict:
             if getattr(scan, "engine_versions_json", None) else None
         ),
         "skipped": json.loads(scan.skipped_json) if scan.skipped_json else [],
+        "suppressed": json.loads(scan.suppressed_json) if scan.suppressed_json else [],
         "created_at": _iso_utc(scan.created_at),
         "completed_at": _iso_utc(scan.completed_at),
         "heartbeat_at": _iso_utc(getattr(scan, "heartbeat_at", None)),

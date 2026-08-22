@@ -16,10 +16,15 @@ export function buildFixPrompt(scan: ScanDetail): string {
   const advisory = total - blockEligible
   const filesScanned = scan.analytics?.files_scanned ?? scan.files_scanned
   const skipped = scan.files_skipped > 0 ? ` · ${scan.files_skipped} file(s) skipped (not analyzed — some findings may be missing)` : ""
+  // An exported report that omits what went unread is the same lie as an on-screen one.
+  const suppressedCount = scan.analytics?.files_suppressed ?? 0
+  const suppressed = suppressedCount > 0
+    ? ` · ${suppressedCount} director${suppressedCount === 1 ? "y" : "ies"} excluded by the repository's own ignore rules (not examined)`
+    : ""
 
   const out: string[] = []
   out.push(`# Code-scan findings — ${shortRef(scan.ref)} (scan #${scan.id})`)
-  out.push(`${total} finding${total === 1 ? "" : "s"} · ${blockEligible} block-eligible (provable) · ${advisory} advisory · ${filesScanned} files scanned${skipped}`)
+  out.push(`${total} finding${total === 1 ? "" : "s"} · ${blockEligible} block-eligible (provable) · ${advisory} advisory · ${filesScanned} files scanned${skipped}${suppressed}`)
   out.push("")
   out.push(
     "Fix each issue below with the smallest change that resolves it; if you can't fix one, say why. " +

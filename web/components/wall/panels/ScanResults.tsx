@@ -150,6 +150,21 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
         </div>
       )}
 
+      {/* Different cause, different sentence. This one is the repository's own ignore
+          rules excluding part of itself; the banner above is our size/type caps. Both
+          force `clean` false server-side (coverage.summarize), so this can never sit
+          next to an "All clear". */}
+      {(a?.files_suppressed ?? 0) > 0 && (
+        <div className="flex items-start gap-2 rounded-md p-3 text-sm" style={{ color: "var(--wall-muted)", background: "rgba(255,200,61,0.06)", border: "1px solid rgba(255,200,61,0.2)" }}>
+          <FileWarning className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--wall-sev-medium)" }} aria-hidden />
+          <span>
+            {a?.files_suppressed} director{(a?.files_suppressed ?? 0) === 1 ? "y was" : "ies were"} excluded by this
+            repository&apos;s own ignore rules and {(a?.files_suppressed ?? 0) === 1 ? "was" : "were"} not examined.
+            A repository can&apos;t be reported as clean while part of it went unread.
+          </span>
+        </div>
+      )}
+
       {/* Verdict. "All clear" requires that every check actually ran — a scan with
           nothing found but three checks skipped is inconclusive, and says so. */}
       {scan.status === "completed" && scan.findings.length === 0 && (

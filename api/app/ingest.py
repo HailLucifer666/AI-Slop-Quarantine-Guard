@@ -115,7 +115,38 @@ def _build_ignore_spec(lines: List[str]) -> Optional["pathspec.PathSpec"]:
 
 
 def _ignored_by_spec(spec: "Optional[pathspec.PathSpec]", rel_path: str) -> bool:
+    """Match a path against the scanned repo's own pooled ignore patterns.
+
+    Only ever called with a DIRECTORY path. Ignore files are content of the repository
+    under examination, authored by whoever is being scanned, so letting them decide about
+    individual files let one line delete a finding: `.env*.local` or `credentials.py` in a
+    repo's .gitignore removed a committed secret from the scan, and the report still said
+    zero files were skipped. Applying the patterns only where directories are decided
+    keeps the genuine noise reduction (build/, .vercel/, bespoke cache dirs) while making
+    it structurally impossible to hide a single file. Whatever IS pruned is recorded in
+    IngestResult.suppressed, and a non-empty list disqualifies a "clean" verdict.
+    """
     return spec is not None and spec.match_file(rel_path.replace("\\", "/"))
+
+
+def _suppressed_note(rel_dir: str) -> str:
+    return f"{rel_dir} (excluded by the repository's own ignore rules — not examined)"
+
+
+def _zip_suppressed_prefix(spec: "Optional[pathspec.PathSpec]", rel: str) -> Optional[str]:
+    """The first parent directory of `rel` the repo's ignore rules exclude, if any.
+
+    read_zip has no directory walk to prune, so containment is decided by testing each
+    ancestor prefix — the archive equivalent of not descending into a pruned folder.
+    """
+    if spec is None:
+        return None
+    parts = rel.replace("\\", "/").split("/")[:-1]
+    for depth in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:depth]) + "/"
+        if _ignored_by_spec(spec, prefix):
+            return prefix
+    return None
 
 # Binary / non-source extensions to skip outright.
 BINARY_EXTS = {
@@ -253,13 +284,19 @@ def walk_dir(root: str) -> IngestResult:
     real_root = os.path.realpath(root)
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune by the built-in denylist, the project's own ignore rules, AND anything
-        # resolving outside the tree we were handed.
-        dirnames[:] = [
-            d for d in dirnames
-            if d not in IGNORE_DIRS
-            and not _ignored_by_spec(spec, os.path.relpath(os.path.join(dirpath, d), root) + "/")
-            and _within(real_root, os.path.join(dirpath, d))
-        ]
+        # resolving outside the tree we were handed. The repo's own rules apply HERE and
+        # nowhere else — see _ignored_by_spec.
+        keep: List[str] = []
+        for d in dirnames:
+            abs_dir = os.path.join(dirpath, d)
+            rel_dir = os.path.relpath(abs_dir, root).replace("\\", "/")
+            if d in IGNORE_DIRS or not _within(real_root, abs_dir):
+                continue  # our own denylist, or an escaping link: never the user's code
+            if _ignored_by_spec(spec, rel_dir + "/"):
+                suppressed.append(_suppressed_note(rel_dir + "/"))
+                continue
+            keep.append(d)
+        dirnames[:] = keep
         for name in filenames:
             abs_path = os.path.join(dirpath, name)
             rel = os.path.relpath(abs_path, root)
@@ -268,8 +305,6 @@ def walk_dir(root: str) -> IngestResult:
                 # is neither "skipped" nor "suppressed" — there was nothing of the user's
                 # to examine. Dropped silently, like a binary file.
                 continue
-            if _ignored_by_spec(spec, rel):
-                continue  # quietly ignored (project's .gitignore) — not a "skipped" file
             try:
                 size = os.path.getsize(abs_path)
             except OSError:
@@ -366,8 +401,14 @@ def read_zip(data: bytes) -> IngestResult:
             rel = _rel(name)
             if not rel:
                 continue
-            if _ignored_by_spec(spec, rel):
-                continue  # quietly ignored (project's .gitignore) — not a "skipped" file
+            # Repo-supplied patterns decide DIRECTORIES only (see _ignored_by_spec), so
+            # test the entry's ancestors rather than its filename.
+            excluded_dir = _zip_suppressed_prefix(spec, rel)
+            if excluded_dir is not None:
+                note = _suppressed_note(excluded_dir)
+                if note not in suppressed:
+                    suppressed.append(note)  # one entry per directory, not per file
+                continue
             try:
                 raw = _read_entry_capped(zf, info, MAX_FILE_BYTES)
             except (RuntimeError, zipfile.BadZipFile):

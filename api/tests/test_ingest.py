@@ -57,24 +57,43 @@ def test_walk_dir_skips_build_output_denylist(tmp_path):
     assert not any(seg in p for p in files for seg in (".vercel", ".output", "nitro-output", "dev-runtime"))
 
 
-def test_walk_dir_honors_gitignore(tmp_path):
-    # The project's own .gitignore (even one level deep) excludes its artifacts —
-    # including bespoke dirs the denylist can't know about, and local env files.
-    (tmp_path / ".gitignore").write_text(".eve/\n.env*.local\n", encoding="utf-8")
+def test_walk_dir_honors_gitignore_directories_and_reports_them(tmp_path):
+    # A repo's own .gitignore still prunes bespoke build/cache DIRECTORIES the denylist
+    # can't anticipate — real noise reduction, and it stays. What changed is that the
+    # exclusion is recorded in `suppressed` instead of vanishing: a directory we did not
+    # read is a gap in the result, not a clean pass.
+    (tmp_path / ".gitignore").write_text(".eve/\n", encoding="utf-8")
     (tmp_path / "main.ts").write_text("const y = 2", encoding="utf-8")
-    (tmp_path / ".env.local").write_text('TOKEN="eyJsecret"', encoding="utf-8")
     eve = tmp_path / ".eve" / "dev"
     eve.mkdir(parents=True)
     (eve / "snap.ts").write_text('const k = "z"', encoding="utf-8")
 
-    _res = walk_dir(str(tmp_path))
-    files, skipped = _res.files, _res.skipped
+    res = walk_dir(str(tmp_path))
 
-    assert "main.ts" in files
-    assert ".env.local" not in files                  # gitignored local env
-    assert not any(".eve" in p for p in files)         # gitignored bespoke dir
-    # Ignored paths are quietly excluded — NOT counted in the user-facing "skipped" list.
-    assert not any(".eve" in s or ".env.local" in s for s in skipped)
+    assert "main.ts" in res.files
+    assert not any(".eve" in p for p in res.files)      # gitignored bespoke dir
+    assert any(".eve" in entry for entry in res.suppressed)
+    assert not any(".eve" in s for s in res.skipped)    # suppressed is not skipped
+
+
+def test_walk_dir_gitignore_cannot_hide_an_individual_file(tmp_path):
+    # THE F1 REGRESSION. Ignore files are content of the repository under examination,
+    # authored by whoever is being scanned. Honouring a FILE pattern let one line delete
+    # a finding: `.env*.local` — the most common real-world line there is — hid a leaked
+    # token from the secret scanner, and files_skipped still read 0. Repo-supplied
+    # patterns now decide directories only, so no single file can be hidden.
+    (tmp_path / ".gitignore").write_text(".env*.local\ncredentials.py\n", encoding="utf-8")
+    (tmp_path / "main.ts").write_text("const y = 2", encoding="utf-8")
+    (tmp_path / ".env.local").write_text('TOKEN="eyJsecret"', encoding="utf-8")
+    (tmp_path / "credentials.py").write_text(
+        'AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7REALKEY"', encoding="utf-8"
+    )
+
+    res = walk_dir(str(tmp_path))
+
+    assert "main.ts" in res.files
+    assert ".env.local" in res.files        # silently dropped before this fix
+    assert "credentials.py" in res.files    # silently dropped before this fix
 
 
 def _symlink_or_skip(target: str, link: str) -> None:
@@ -162,19 +181,29 @@ def test_read_zip_symlink_entry_yields_only_its_target_path_not_the_host_file(tm
     assert not any("HOSTKEYMATERIAL" in content for content in files.values())
 
 
-def test_read_zip_honors_gitignore():
+def test_read_zip_honors_gitignore_directories_and_reports_them():
     data = _zip({
-        "proj/.gitignore": ".vercel/\n.env*.local\n",
+        "proj/.gitignore": ".vercel/\n",
         "proj/app.py": "a = 1",
         "proj/.vercel/output/bundle.mjs": 'const apiKey = "x"',
-        "proj/.env.local": 'TOKEN="eyJsecret"',
     })
-    _res = read_zip(data)
-    files, skipped = _res.files, _res.skipped
-    assert "app.py" in files
-    assert not any(".vercel" in p for p in files)
-    assert ".env.local" not in files
-    assert not any(".vercel" in s or ".env.local" in s for s in skipped)
+    res = read_zip(data)
+    assert "app.py" in res.files
+    assert not any(".vercel" in p for p in res.files)
+    assert any(".vercel" in entry for entry in res.suppressed)
+
+
+def test_read_zip_gitignore_cannot_hide_an_individual_file():
+    # The same F1 regression as walk_dir, reached through the zip-upload path.
+    data = _zip({
+        "proj/.gitignore": ".env*.local\ncredentials.py\n",
+        "proj/app.py": "a = 1",
+        "proj/.env.local": 'TOKEN="eyJsecret"',
+        "proj/credentials.py": 'AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7REALKEY"',
+    })
+    res = read_zip(data)
+    assert ".env.local" in res.files
+    assert "credentials.py" in res.files
 
 
 # --- read_zip ---------------------------------------------------------------

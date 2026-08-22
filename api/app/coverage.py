@@ -401,21 +401,31 @@ def note_missing_engines(coverages: List[RuleCoverage], missing_by_rule: Dict[st
         coverage.detail = f"{coverage.detail}; {note}" if coverage.detail else note
 
 
-def summarize(coverages: List[RuleCoverage]) -> dict:
+def summarize(coverages: List[RuleCoverage], unexamined_count: int = 0) -> dict:
     """Roll per-rule coverage into the numbers a report headline needs.
 
     ``clean`` is deliberately narrow: it is True only when every check reached a
-    conclusive result AND found nothing. A scan where three checks could not run is
-    not clean — it is inconclusive, and must say so.
+    conclusive result, found nothing, AND every file was actually read. A scan where
+    three checks could not run is not clean — it is inconclusive, and must say so.
+
+    ``unexamined_count`` closes the other half of that. Rule status alone described which
+    CHECKS ran, never which FILES they got to see, so a file the scan never read could sit
+    beside an "All clear" headline. That happened two ways — the scanned repository's own
+    ignore rules excluding it, and our size/count caps skipping it — which is one broken
+    invariant, not two bugs. Asserting it here means every future path that fails to read
+    something is covered by construction, without having to remember this rule again.
     """
     total = len(coverages)
     conclusive = [c for c in coverages if c.is_conclusive]
     findings = sum(c.findings for c in coverages)
+    every_rule_conclusive = total > 0 and len(conclusive) == total
+    everything_read = unexamined_count == 0
     return {
         "rules_total": total,
         "rules_ran": len(conclusive),
         "rules_incomplete": total - len(conclusive),
-        "fully_covered": total > 0 and len(conclusive) == total,
-        "clean": total > 0 and len(conclusive) == total and findings == 0,
+        "fully_covered": every_rule_conclusive and everything_read,
+        "clean": every_rule_conclusive and everything_read and findings == 0,
+        "unexamined_files": unexamined_count,
         "rules": [c.to_dict() for c in coverages],
     }

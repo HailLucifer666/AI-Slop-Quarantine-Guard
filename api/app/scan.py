@@ -121,6 +121,7 @@ def aggregate(
     files_scanned: int,
     skipped: List[str],
     coverage: Optional[dict] = None,
+    suppressed: Optional[List[str]] = None,
 ) -> dict:
     """Roll findings up into the analytics the dashboard renders.
 
@@ -147,6 +148,9 @@ def aggregate(
         "top_files": [{"file_path": p, "count": n} for p, n in top_files],
         "files_scanned": files_scanned,
         "files_skipped": len(skipped),
+        # Reported apart from files_skipped: the cause differs, so the sentence the user
+        # needs differs. Both feed coverage.summarize's unexamined count.
+        "files_suppressed": len(suppressed or []),
         # True only when every check reached a conclusive result and found nothing.
         # Absent coverage means we cannot claim cleanliness, so we don't.
         "clean": bool(coverage.get("clean", False)),
@@ -154,6 +158,7 @@ def aggregate(
         "rules_ran": coverage.get("rules_ran", 0),
         "rules_total": coverage.get("rules_total", 0),
         "rules_incomplete": coverage.get("rules_incomplete", 0),
+        "unexamined_files": coverage.get("unexamined_files", 0),
     }
 
 
@@ -289,11 +294,12 @@ async def run_scan(
     engine_status = probe_all()
     note_missing_engines(coverages, rules_missing_an_engine())
 
-    coverage_summary = summarize(coverages)
+    # Files nobody read cannot coexist with a clean verdict — see summarize.
+    coverage_summary = summarize(coverages, unexamined_count=len(skipped) + len(suppressed))
     duration_ms = int((time.monotonic() - started) * 1000)
     return {
         "findings": [finding_to_dict(f) for f in findings],
-        "analytics": aggregate(findings, len(files), skipped, coverage_summary),
+        "analytics": aggregate(findings, len(files), skipped, coverage_summary, suppressed),
         "coverage": coverage_summary,
         # Clustered view, so 318 real TODOs cannot bury 3 real secrets. Every finding
         # still appears above; this is structure, not filtering.

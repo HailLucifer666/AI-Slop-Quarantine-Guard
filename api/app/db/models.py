@@ -107,6 +107,9 @@ class Scan(Base):
     analytics_json = Column(Text, nullable=True)         # json.dumps(analytics)
     findings_json = Column(Text, nullable=True)          # json.dumps([finding, ...])
     skipped_json = Column(Text, nullable=True)           # json.dumps([skipped paths])
+    # Excluded by the SCANNED repo's own ignore rules. Kept apart from skipped_json:
+    # different cause, different wording, and the user is owed both facts.
+    suppressed_json = Column(Text, nullable=True)        # json.dumps([suppressed dirs])
     # Per-rule coverage (app.coverage.summarize). Without this a stored scan cannot
     # say which checks actually ran, so "0 findings" stays ambiguous forever.
     coverage_json = Column(Text, nullable=True)

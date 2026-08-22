@@ -65,6 +65,7 @@ _ADDED_COLUMNS = (
     ("scans", "file_count", "INTEGER"),
     ("scans", "ingested_at", "TIMESTAMP"),
     ("scans", "engine_versions_json", "TEXT"),
+    ("scans", "suppressed_json", "TEXT"),
 )
 
 
