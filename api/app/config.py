@@ -57,7 +57,12 @@ class Settings(BaseSettings):
     github_app_private_key: str = ""
     github_app_private_key_path: str = ""
     disabled_analyzers: str = ""
-    environment: str = "development"
+    # Defaults to production so a deploy that forgets ENVIRONMENT fails closed. The
+    # secrets check below keys off this field, so defaulting it to "development" made
+    # the guard depend on the operator setting the very variable that says this IS
+    # production — and a miss meant forgeable webhooks, an open scan API, and
+    # local-folder scans, all silently. You opt IN to development (.env.example does).
+    environment: str = "production"
     dashboard_url: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     llm_base_url: str = "https://integrate.api.nvidia.com/v1"

@@ -30,6 +30,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://app:password@postgres:5432/app
       REDIS_URL: redis://redis:6379
+      ENVIRONMENT: development
       GITHUB_WEBHOOK_SECRET: dev_secret
       GITHUB_APP_ID: dev_app_id
       GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds9s00...\n-----END RSA PRIVATE KEY-----"
@@ -47,6 +48,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://app:password@postgres:5432/app
       REDIS_URL: redis://redis:6379
+      ENVIRONMENT: development
       GITHUB_WEBHOOK_SECRET: dev_secret
       GITHUB_APP_ID: dev_app_id
       GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds9s00...\n-----END RSA PRIVATE KEY-----"
