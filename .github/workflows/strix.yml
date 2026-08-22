@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Cache pipx-installed Strix
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/pipx/venvs/strix-agent
           key: strix-agent-1.0.4-${{ runner.os }}
