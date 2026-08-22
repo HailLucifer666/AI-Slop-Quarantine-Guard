@@ -50,6 +50,37 @@ TOP_FILES = 10
 # On timeout it contributes no findings and the scan continues (fail-safe).
 ANALYZER_BUDGET = 90.0
 
+# Analyzers that are declared `async def` but contain ZERO await expressions: they are
+# pure CPU work over the file map. A coroutine with no await runs start-to-finish in a
+# single step, so asyncio.wait_for never reaches a suspension point at which to fire —
+# the budget above was decorative for these three, and the heartbeat task on the same
+# loop was starved for the whole run (which is what would let store's 300s lease lapse
+# and get a healthy scan reconciled to "failed").
+#
+# Note what was actually protecting this path before: the ingest caps, not the timeout.
+# Measured at the 50MB ceiling the worst of these is ~23s, far inside the 90s budget.
+# Raise MAX_TOTAL_BYTES/MAX_FILES, or add a slower rule, and that stops being true —
+# so do not delete this wrapper on the grounds that "it never times out anyway".
+SYNC_RULES = frozenset({"SQG002", "SQG003", "SQG006"})
+
+
+async def _run_analyzer(rule_id: str, run: Callable, budget: float) -> List[Finding]:
+    """Await one analyzer under `budget`, moving the CPU-bound ones off the event loop.
+
+    The sync three are driven by asyncio.run inside a worker thread. That is safe only
+    because they never await — an analyzer that did real I/O would be given a second,
+    unrelated event loop, so adding an await to one of these means removing it from
+    SYNC_RULES in the same change.
+
+    A thread cannot be cancelled: on timeout we stop waiting and report TIMED_OUT, and
+    the abandoned thread runs to completion in the background rather than being killed.
+    That is the deliberate trade — a free event loop and an enforceable budget, at the
+    cost of one lingering thread in a case that also means something is badly wrong.
+    """
+    if rule_id in SYNC_RULES:
+        return await asyncio.wait_for(asyncio.to_thread(lambda: asyncio.run(run())), timeout=budget)
+    return await asyncio.wait_for(run(), timeout=budget)
+
 
 def _local_fetch_one(files: Dict[str, str]):
     """fetch_file(path) -> content  — the contract dependencies.py expects via repo_context."""
@@ -254,7 +285,7 @@ async def run_scan(
 
         rule_started = time.monotonic()
         try:
-            produced = await asyncio.wait_for(run(), timeout=ANALYZER_BUDGET)
+            produced = await _run_analyzer(rule_id, run, ANALYZER_BUDGET)
             findings += produced
             coverage.findings = len(produced)
         except asyncio.TimeoutError:

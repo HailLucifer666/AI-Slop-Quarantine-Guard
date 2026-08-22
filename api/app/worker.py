@@ -73,7 +73,7 @@ from app.queue import (
     recover_orphaned_jobs,
     reserve_job,
 )
-from app.scan import ANALYZER_BUDGET, run_scan
+from app.scan import ANALYZER_BUDGET, _run_analyzer, run_scan
 from app.store import (
     complete_scan,
     fail_scan,
@@ -194,7 +194,8 @@ async def _run_pr_analysis(
             continue
 
         try:
-            produced = await asyncio.wait_for(run(), timeout=ANALYZER_BUDGET)
+            # Same off-loop dispatch as the whole-repo scan — see scan._run_analyzer.
+            produced = await _run_analyzer(rule_id, run, ANALYZER_BUDGET)
             findings += produced
         except asyncio.TimeoutError:
             # One slow analyzer must never hang the PR check — but the check run must

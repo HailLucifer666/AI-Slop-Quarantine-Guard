@@ -285,3 +285,78 @@ async def test_unexamined_files_disqualify_a_clean_verdict():
     assert with_suppression["analytics"]["fully_covered"] is False
     assert with_suppression["analytics"]["files_suppressed"] == 1
     assert baseline["analytics"]["files_suppressed"] == 0
+
+
+# --- the analyzer budget must actually be enforceable -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_synchronous_analyzer_that_overruns_is_actually_stopped(monkeypatch):
+    """ANALYZER_BUDGET was unenforceable for the three synchronous analyzers.
+
+    check_secrets, check_sast and check_placeholders are `async def` with zero awaits.
+    A coroutine with no await runs start-to-finish in one step, and asyncio.wait_for can
+    only fire its timeout at a suspension point that never arrives — so the budget never
+    triggered and the heartbeat task on the same loop was starved for the whole run.
+    Measured worst case at the ingest ceiling was 23s, well under the 90s budget, so this
+    was latent rather than live: the ingest caps were doing the protecting, not the
+    timeout. This test makes the timeout do its job.
+    """
+    import time as _time
+
+    def _sync_overrun():
+        deadline = _time.monotonic() + 2.0
+        while _time.monotonic() < deadline:
+            pass
+        return []
+
+    async def slow_secrets(_diff, _ctx):
+        return _sync_overrun()
+
+    monkeypatch.setattr(scanmod, "check_secrets", slow_secrets)
+    monkeypatch.setattr(scanmod, "ANALYZER_BUDGET", 0.3)
+
+    result = await run_scan({"app/x.py": "x = 1\n"})
+
+    secrets_row = next(r for r in result["coverage"]["rules"] if r["rule_id"] == "SQG002")
+    assert secrets_row["status"] == "timed_out"
+    # A stopped check is a gap, never a pass.
+    assert result["analytics"]["clean"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_event_loop_stays_free_while_a_sync_analyzer_runs(monkeypatch):
+    """The other half of the same defect: a starved loop cannot renew the scan lease.
+
+    worker._heartbeat_loop is an asyncio task. While a synchronous analyzer occupied the
+    loop it never got to run, so a long-enough analyzer would let store's 300s lease
+    lapse and reconcile_stale_scans would mark a perfectly healthy scan "failed" with
+    "the worker process most likely stopped mid-scan" — a false statement.
+    """
+    import time as _time
+
+    ticks = []
+
+    async def ticker():
+        while True:
+            await asyncio.sleep(0.05)
+            ticks.append(1)
+
+    def _sync_work():
+        deadline = _time.monotonic() + 1.0
+        while _time.monotonic() < deadline:
+            pass
+        return []
+
+    async def slow_sast(_diff, _ctx):
+        return _sync_work()
+
+    monkeypatch.setattr(scanmod, "check_sast", slow_sast)
+    beat = asyncio.create_task(ticker())
+    try:
+        await run_scan({"app/x.py": "x = 1\n"})
+    finally:
+        beat.cancel()
+
+    # ~20 ticks are due across a 1s analyzer; zero means the loop was blocked outright.
+    assert len(ticks) > 5, f"event loop was starved: only {len(ticks)} ticks"
