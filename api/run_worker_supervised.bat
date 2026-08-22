@@ -12,12 +12,16 @@ REM  Run from api/ (or double-click). Ctrl+C twice to stop for real.
 REM ===================================================================
 
 cd /d "%~dp0"
-set PYTHONPATH=.
+REM Honour the interpreter and PYTHONPATH start.bat resolved (it may have found
+REM a versioned `py -3.12` rather than a bare `python` on PATH). Fall back to the
+REM old defaults so double-clicking this file directly still works.
+if not defined CHILD_PYTHON set CHILD_PYTHON=python
+if not defined PYTHONPATH set PYTHONPATH=.
 
 :loop
 echo.
-echo [worker] starting at %TIME%
-python -m app.worker
+echo [worker] starting at %TIME% using %CHILD_PYTHON%
+%CHILD_PYTHON% -m app.worker
 echo [worker] exited with code %errorlevel% - restarting in 3s (Ctrl+C to stop)
 timeout /t 3 /nobreak >nul
 goto loop

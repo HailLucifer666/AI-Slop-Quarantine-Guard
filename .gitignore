@@ -46,6 +46,7 @@ out/
 
 .DS_Store
 *.log
+.setup-stamp
 
 # Local agent tooling / test caches — not project source
 .claude/
