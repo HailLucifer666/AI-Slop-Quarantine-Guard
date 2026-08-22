@@ -45,6 +45,20 @@ async def already_seen(delivery_guid: str) -> bool:
     return not was_new
 
 
+async def release_delivery(delivery_guid: str) -> None:
+    """Undo an ``already_seen`` claim so GitHub's retry is processed, not deduped.
+
+    Called only when the enqueue that should have followed the claim failed: at that
+    point the job exists nowhere, and leaving the key set would turn a retryable
+    delivery into a permanently dropped PR. Best-effort — if Redis is unreachable we
+    could not have released it anyway, and the delivery is lost regardless.
+    """
+    try:
+        await get_redis().delete(f"{DEDUPE_KEY_PREFIX}{delivery_guid}")
+    except Exception:  # noqa: BLE001 — nothing better to do; the caller is already failing
+        pass
+
+
 async def enqueue_webhook_delivery(delivery_guid: str, event: str, payload: dict) -> None:
     """Push a raw webhook delivery onto the Redis queue for the worker (Phase 2)."""
     job = json.dumps({"delivery_guid": delivery_guid, "event": event, "payload": payload})
