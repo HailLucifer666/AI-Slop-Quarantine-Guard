@@ -9,7 +9,7 @@
     "lint": "node node_modules/next/dist/bin/next lint"
   },
   "dependencies": {
-    "@react-three/drei": "^10.0.0",
+    "@react-three/drei": "^10.7.8",
     "@react-three/fiber": "^9.0.0",
     "@supabase/supabase-js": "^2.108.2",
     "@types/three": "^0.169.0",
