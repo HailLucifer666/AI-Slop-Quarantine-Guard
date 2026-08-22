@@ -126,13 +126,16 @@ def main(argv: Optional[list] = None) -> int:
         return 2
 
     try:
-        files, skipped = walk_dir(args.path)
+        ingested = walk_dir(args.path)
     except IngestError as exc:
         print(f"could not read {args.path}: {exc}", file=sys.stderr)
         return 2
 
+    files = ingested.files
     overrides = asyncio.run(_offline_overrides()) if args.offline else None
-    result = asyncio.run(run_scan(files, skipped, overrides=overrides))
+    result = asyncio.run(run_scan(
+        files, ingested.skipped, overrides=overrides, suppressed=ingested.suppressed,
+    ))
 
     if args.json:
         result["census"] = take_census(files).language_files

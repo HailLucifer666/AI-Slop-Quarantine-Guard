@@ -33,7 +33,8 @@ def _fixture_path(name: str) -> str:
 
 
 async def _scan_fixture(name: str) -> dict:
-    files, skipped = walk_dir(_fixture_path(name))
+    _res = walk_dir(_fixture_path(name))
+    files, skipped = _res.files, _res.skipped
     assert files, f"fixture {name} ingested no files"
     assert skipped == [], f"fixture {name} should be small enough to ingest whole"
     return await run_scan(files, skipped, overrides=REPLAY_OVERRIDES)

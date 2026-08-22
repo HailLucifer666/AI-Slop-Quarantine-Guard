@@ -34,7 +34,8 @@ def test_lockfiles_are_ingested(tmp_path):
     (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3}', encoding="utf-8")
     (tmp_path / "go.sum").write_text("example.com/m v1.0.0 h1:abc=\n", encoding="utf-8")
 
-    files, skipped = walk_dir(str(tmp_path))
+    _res = walk_dir(str(tmp_path))
+    files, skipped = _res.files, _res.skipped
 
     for name in ("yarn.lock", "poetry.lock", "Cargo.lock", "package-lock.json", "go.sum"):
         assert name in files, f"{name} was dropped before analysis"
@@ -48,7 +49,8 @@ def test_lockfile_survives_the_normal_per_file_cap(tmp_path):
     (tmp_path / "yarn.lock").write_text(big, encoding="utf-8")
     assert len(big.encode()) > MAX_FILE_BYTES
 
-    files, skipped = walk_dir(str(tmp_path))
+    _res = walk_dir(str(tmp_path))
+    files, skipped = _res.files, _res.skipped
 
     assert "yarn.lock" in files
     assert skipped == []
@@ -58,7 +60,8 @@ def test_absurdly_large_lockfile_is_still_capped_and_recorded(tmp_path):
     """The exemption is a bigger bound, not an unbounded read."""
     (tmp_path / "yarn.lock").write_text("x" * (LOCKFILE_MAX_BYTES + 1024), encoding="utf-8")
 
-    files, skipped = walk_dir(str(tmp_path))
+    _res = walk_dir(str(tmp_path))
+    files, skipped = _res.files, _res.skipped
 
     assert "yarn.lock" not in files
     assert any("yarn.lock" in s for s in skipped)  # skipped visibly, never silently
@@ -66,14 +69,16 @@ def test_absurdly_large_lockfile_is_still_capped_and_recorded(tmp_path):
 
 def test_lockfiles_are_ingested_from_a_zip():
     data = _zip({"proj/yarn.lock": 'version "1.0.0"\n', "proj/app.js": "var x = 1;\n"})
-    files, _ = read_zip(data)
+    _res = read_zip(data)
+    files, _ = _res.files, _res.skipped
     assert "yarn.lock" in files
 
 
 def test_real_binary_extensions_are_still_skipped(tmp_path):
     (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     (tmp_path / "app.pyc").write_bytes(b"\x00\x01")
-    files, _ = walk_dir(str(tmp_path))
+    _res = walk_dir(str(tmp_path))
+    files, _ = _res.files, _res.skipped
     assert files == {}
 
 
@@ -89,7 +94,8 @@ def test_agent_worktrees_are_not_scanned(tmp_path):
     worktree.mkdir(parents=True)
     (worktree / "chart.tsx").write_text("const a = 1;\n", encoding="utf-8")
 
-    files, _ = walk_dir(str(tmp_path))
+    _res = walk_dir(str(tmp_path))
+    files, _ = _res.files, _res.skipped
 
     assert "src/chart.tsx" in files
     assert not any(path.startswith(".claude/") for path in files)
@@ -101,7 +107,8 @@ def test_generated_and_minified_files_are_not_scanned(tmp_path):
     (tmp_path / "api_pb2.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "app.js").write_text("var c = 3;\n", encoding="utf-8")
 
-    files, _ = walk_dir(str(tmp_path))
+    _res = walk_dir(str(tmp_path))
+    files, _ = _res.files, _res.skipped
 
     assert list(files) == ["app.js"]
 
@@ -109,5 +116,6 @@ def test_generated_and_minified_files_are_not_scanned(tmp_path):
 def test_a_lockfile_is_never_mistaken_for_generated_output(tmp_path):
     """packages.lock.json ends in .json but must not trip any generated-name rule."""
     (tmp_path / "packages.lock.json").write_text("{}", encoding="utf-8")
-    files, _ = walk_dir(str(tmp_path))
+    _res = walk_dir(str(tmp_path))
+    files, _ = _res.files, _res.skipped
     assert "packages.lock.json" in files

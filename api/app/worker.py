@@ -56,7 +56,15 @@ from app.github_client import (
     update_check_run,
 )
 from app.grouping import group_findings
-from app.ingest import IngestError, clone_repo, content_hash, head_sha, read_zip, walk_dir
+from app.ingest import (
+    IngestError,
+    IngestResult,
+    clone_repo,
+    content_hash,
+    head_sha,
+    read_zip,
+    walk_dir,
+)
 from app.queue import (
     QUEUE_PAIRS,
     SCAN_QUEUE_KEY,
@@ -293,13 +301,13 @@ def _extract_pr(payload: dict) -> tuple[str, int, str, int]:
     )
 
 
-def ingest_codebase(source: str, ref: str) -> tuple[dict[str, str], list[str], Optional[str]]:
-    """Turn a scan job's (source, ref) into a {path: content} map, skipped list, and SHA.
+def ingest_codebase(source: str, ref: str) -> IngestResult:
+    """Turn a scan job's (source, ref) into an IngestResult.
 
     Read-only by construction: clone is shallow and we only parse text — scanned
     code is never executed. The temp zip is deleted after reading.
 
-    The third element is the resolved commit, or None where there genuinely isn't one
+    ``resolved_sha`` is the commit examined, or None where there genuinely isn't one
     (a zip upload, a folder that isn't a git repo). None means "not applicable", and is
     reported as such rather than filled in with a guess.
     """
@@ -309,8 +317,7 @@ def ingest_codebase(source: str, ref: str) -> tuple[dict[str, str], list[str], O
         try:
             with open(ref, "rb") as fh:
                 data = fh.read()
-            files, skipped = read_zip(data)
-            return files, skipped, None  # an archive has no commit
+            return read_zip(data)  # an archive has no commit; resolved_sha stays None
         finally:
             try:
                 os.remove(ref)
@@ -319,8 +326,9 @@ def ingest_codebase(source: str, ref: str) -> tuple[dict[str, str], list[str], O
     if source == "local":
         if settings.environment != "development":
             raise IngestError("local-folder scans are only allowed in development")
-        files, skipped = walk_dir(ref)
-        return files, skipped, head_sha(ref)  # None when the folder isn't a git repo
+        result = walk_dir(ref)
+        result.resolved_sha = head_sha(ref)  # None when the folder isn't a git repo
+        return result
     raise IngestError(f"unknown scan source: {source}")
 
 
@@ -356,13 +364,14 @@ async def handle_scan_job(job: dict) -> None:
     heartbeat = asyncio.create_task(_heartbeat_loop(scan_id))
     try:
         await mark_running(scan_id)
-        files, skipped, resolved_sha = ingest_codebase(source, ref)
+        ingested = ingest_codebase(source, ref)
+        files = ingested.files
 
         # Record the snapshot before analyzing it, so even a scan that dies mid-analysis
         # still proves which commit and which file set it was looking at.
         await record_ingest_provenance(
             scan_id,
-            resolved_sha=resolved_sha,
+            resolved_sha=ingested.resolved_sha,
             content_hash=content_hash(files),
             file_count=len(files),
         )
@@ -374,7 +383,10 @@ async def handle_scan_job(job: dict) -> None:
             except Exception:  # noqa: BLE001
                 logger.debug("progress update dropped for scan %s", scan_id)
 
-        result = await run_scan(files, skipped, on_progress=_progress)
+        result = await run_scan(
+            files, ingested.skipped, on_progress=_progress,
+            suppressed=ingested.suppressed,
+        )
 
         # Shadow gate: count findings that WOULD block under the configured rules,
         # so the dashboard + audit show enforcement impact without ever blocking.

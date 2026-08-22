@@ -17,10 +17,38 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 import pathspec
+
+
+@dataclass
+class IngestResult:
+    """Everything one ingestion produced, and everything it did NOT read.
+
+    The three sources previously returned bare tuples of differing arity — walk_dir and
+    read_zip gave (files, skipped) while clone_repo gave (files, skipped, sha) — which
+    left nowhere to report a fourth fact without changing every caller again.
+
+    ``skipped`` and ``suppressed`` are deliberately separate: they have different causes
+    and need different wording in the report. Skipped means we looked and could not take
+    it (size/count cap, unreadable). Suppressed means the scanned repository's own ignore
+    rules excluded it. Both mean "not examined", which is what disqualifies a clean
+    verdict — see coverage.summarize.
+    """
+
+    files: Dict[str, str]
+    skipped: List[str] = field(default_factory=list)
+    suppressed: List[str] = field(default_factory=list)
+    resolved_sha: Optional[str] = None
+
+    @property
+    def unexamined_count(self) -> int:
+        """Files the scan did not read, for any reason. Never claim clean while > 0."""
+        return len(self.skipped) + len(self.suppressed)
+
 
 # Hard caps (free-tier safe). Over budget → skip + record.
 MAX_FILES = 5000
@@ -213,12 +241,13 @@ def _within(real_root: str, path: str) -> bool:
     return resolved == real_root or resolved.startswith(real_root + os.sep)
 
 
-def walk_dir(root: str) -> Tuple[Dict[str, str], List[str]]:
-    """Read a local directory tree into a {path: content} map (+ skipped list)."""
+def walk_dir(root: str) -> IngestResult:
+    """Read a local directory tree into an IngestResult."""
     if not os.path.isdir(root):
         raise IngestError(f"not a directory: {root}")
     files: Dict[str, str] = {}
     skipped: List[str] = []
+    suppressed: List[str] = []
     total = [0]
     spec = _collect_dir_ignore_spec(root)
     real_root = os.path.realpath(root)
@@ -254,7 +283,7 @@ def walk_dir(root: str) -> Tuple[Dict[str, str], List[str]]:
             except OSError:
                 continue
             _accumulate(files, skipped, total, rel, raw, size)
-    return files, skipped
+    return IngestResult(files=files, skipped=skipped, suppressed=suppressed)
 
 
 _READ_CHUNK = 65536
@@ -296,7 +325,7 @@ def _common_prefix(names: List[str]) -> str:
     return ""
 
 
-def read_zip(data: bytes) -> Tuple[Dict[str, str], List[str]]:
+def read_zip(data: bytes) -> IngestResult:
     """Read a zip archive's entries directly into a {path: content} map.
 
     Entries are read from the archive, never written to disk, so path traversal
@@ -310,6 +339,7 @@ def read_zip(data: bytes) -> Tuple[Dict[str, str], List[str]]:
 
     files: Dict[str, str] = {}
     skipped: List[str] = []
+    suppressed: List[str] = []
     total = [0]
     with zf:
         names = [i for i in zf.infolist() if not i.is_dir()]
@@ -347,7 +377,7 @@ def read_zip(data: bytes) -> Tuple[Dict[str, str], List[str]]:
                 skipped.append(f"{rel} (exceeds {MAX_FILE_BYTES // 1024}KB file cap)")
                 continue
             _accumulate(files, skipped, total, rel, raw, len(raw))
-    return files, skipped
+    return IngestResult(files=files, skipped=skipped, suppressed=suppressed)
 
 
 def validate_clone_url(url: str) -> str:
@@ -398,13 +428,13 @@ def head_sha(directory: str) -> Optional[str]:
     return sha if proc.returncode == 0 and sha else None
 
 
-def clone_repo(url: str) -> Tuple[Dict[str, str], List[str], Optional[str]]:
+def clone_repo(url: str) -> IngestResult:
     """Shallow-clone a public repo into a temp dir, read it, then clean up.
 
     Read-only: we clone and parse text. The repo's code is never executed.
 
-    Returns (files, skipped, resolved_sha). The SHA is read before cleanup so a scan
-    can state exactly which commit it examined.
+    The SHA is read before cleanup so a scan can state exactly which commit it
+    examined.
     """
     url = validate_clone_url(url)
     tmp = tempfile.mkdtemp(prefix="slopscan-")
@@ -421,8 +451,9 @@ def clone_repo(url: str) -> Tuple[Dict[str, str], List[str], Optional[str]]:
         )
         if proc.returncode != 0:
             raise IngestError(f"git clone failed: {proc.stderr.strip()[:200]}")
-        files, skipped = walk_dir(tmp)
-        return files, skipped, head_sha(tmp)
+        result = walk_dir(tmp)
+        result.resolved_sha = head_sha(tmp)
+        return result
     except subprocess.TimeoutExpired as exc:
         raise IngestError(f"clone timed out after {CLONE_TIMEOUT_S}s") from exc
     finally:

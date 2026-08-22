@@ -165,12 +165,16 @@ async def run_scan(
     skipped: Optional[List[str]] = None,
     on_progress: Optional[ProgressCb] = None,
     overrides: Optional[Dict[str, Callable]] = None,
+    suppressed: Optional[List[str]] = None,
 ) -> dict:
     """Run all 7 analyzers over a whole codebase and aggregate the results.
 
     Args:
         files: {repo-relative path: full content} map (from app.ingest).
         skipped: paths skipped during ingest (size/count caps), surfaced to the user.
+        suppressed: paths excluded by the scanned repository's OWN ignore rules. Kept
+            separate from ``skipped`` because the cause — and therefore the wording the
+            user needs — is different. Both count as unexamined.
         on_progress: optional async callback invoked before each analyzer and once
             before reporting, with a real {phase, index, total, findings_so_far,
             files_total} payload — honest phase progress, no invented %/ETA.
@@ -184,6 +188,7 @@ async def run_scan(
          duration_ms: int}
     """
     skipped = skipped or []
+    suppressed = suppressed or []
     overrides = overrides or {}
     started = time.monotonic()
 
@@ -297,5 +302,6 @@ async def run_scan(
             name: status.version for name, status in engine_status.items() if status.available
         },
         "skipped": skipped,
+        "suppressed": suppressed,
         "duration_ms": duration_ms,
     }
