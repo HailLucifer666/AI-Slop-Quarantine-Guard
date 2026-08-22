@@ -69,3 +69,6 @@ GIT Dashboard UI.png
 .coverage
 coverage.xml
 htmlcov/
+
+# Local package cache created by start.bat when the configured PKG_ROOT drive is absent.
+.pkgcache/

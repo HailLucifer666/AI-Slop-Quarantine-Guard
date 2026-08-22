@@ -9,22 +9,47 @@ REM ===================================================================
 REM ---------------------------------------------------------------
 REM  Package dump location - ALL packages go here, NEVER C:\
 REM ---------------------------------------------------------------
-set PKG_ROOT=F:\C Drive Packages Dump
-set NPM_PREFIX=%PKG_ROOT%\npm-global
-set PIP_TARGET=%PKG_ROOT%\python-packages
-set NODE_PATH=%NPM_PREFIX%\node_modules
-set STAMP_FILE=%~dp0.setup-stamp
+REM SQG_PKG_ROOT overrides this entirely if you want packages somewhere specific.
+REM Every `set` below is the quoted form on purpose: this repo's own path contains
+REM "&", which cmd reads as a command separator, so an unquoted assignment truncates
+REM the value and tries to execute the remainder ("'Live' is not recognized...").
+if defined SQG_PKG_ROOT (
+    set "PKG_ROOT=%SQG_PKG_ROOT%"
+) else (
+    set "PKG_ROOT=F:\C Drive Packages Dump"
+    REM F: does not exist on every machine. mkdir against a missing DRIVE fails, so
+    REM PIP_TARGET pointed at nowhere, every pip install failed, and the API pane
+    REM exited without ever binding :8000 — the dashboard's only symptom being
+    REM "Failed to fetch - is the API running on :8000?". Fall back to a cache beside
+    REM the repo, which also keeps packages out of C: as intended.
+    if not exist "F:\" set "PKG_ROOT=%~dp0.pkgcache"
+)
+set "NPM_PREFIX=%PKG_ROOT%\npm-global"
+set "PIP_TARGET=%PKG_ROOT%\python-packages"
+set "NODE_PATH=%NPM_PREFIX%\node_modules"
+set "STAMP_FILE=%~dp0.setup-stamp"
 
 REM Make sure the directories exist
-if not exist "%PKG_ROOT%" mkdir "%PKG_ROOT%"
-if not exist "%NPM_PREFIX%" mkdir "%NPM_PREFIX%"
-if not exist "%PIP_TARGET%" mkdir "%PIP_TARGET%"
+if not exist "%PKG_ROOT%" mkdir "%PKG_ROOT%" 2>nul
+if not exist "%NPM_PREFIX%" mkdir "%NPM_PREFIX%" 2>nul
+if not exist "%PIP_TARGET%" mkdir "%PIP_TARGET%" 2>nul
+
+REM Refuse to continue against a package root we could not create: every install
+REM below would fail one by one and the stack would come up half-dead instead.
+if not exist "%PIP_TARGET%" (
+    echo   [X] Could not create the package directory: "%PIP_TARGET%"
+    echo       Set SQG_PKG_ROOT to a writable location and re-run, e.g.
+    echo           set SQG_PKG_ROOT=D:\sqg-packages ^&^& start.bat
+    pause
+    exit /b 1
+)
+echo   [i] Packages: "%PIP_TARGET%"
 
 REM Add pip package bin dirs to PATH so installed CLI tools are found
-set PATH=%PIP_TARGET%\bin;%PIP_TARGET%;%NPM_PREFIX%\bin;%PATH%
+set "PATH=%PIP_TARGET%\bin;%PIP_TARGET%;%NPM_PREFIX%\bin;%PATH%"
 
 REM Tell Python to find packages from our custom target
-set PYTHONPATH=%PIP_TARGET%;%PYTHONPATH%
+set "PYTHONPATH=%PIP_TARGET%;%PYTHONPATH%"
 
 REM ---------------------------------------------------------------
 REM  Check for --check argument (force full re-run of setup)
@@ -50,7 +75,7 @@ if "!FORCE_CHECK!"=="0" (
         REM Read PYTHON_CMD and PIP_TARGET from stamp file
         for /f "usebackq tokens=1,* delims==" %%K in ("!STAMP_FILE!") do (
             if "%%K"=="PYTHON_CMD" set PYTHON_CMD=%%L
-            if "%%K"=="PIP_TARGET" set PIP_TARGET=%%L
+            if "%%K"=="PIP_TARGET" set "PIP_TARGET=%%L"
         )
 
         set FIRST_RUN=0
@@ -65,7 +90,7 @@ set FIRST_RUN=1
 echo.
 echo  ==============================================================
 echo   AI Slop Quarantine Guard - Setup
-echo   All packages install to: %PKG_ROOT%
+echo   All packages install to: "%PKG_ROOT%"
 echo  ==============================================================
 echo.
 
@@ -191,7 +216,7 @@ REM          --target installs to F:\C Drive Packages Dump\python-packages
 REM          NEVER installs to C:\ or the system Python site-packages
 REM ---------------------------------------------------------------
 echo   [5/5] Checking Python dependencies...
-echo         Target: %PIP_TARGET%
+echo         Target: "%PIP_TARGET%"
 
 REM Quick check for key packages in our custom target
 !PYTHON_CMD! -c "import sys; sys.path.insert(0,'%PIP_TARGET%'); import uvicorn, httpx, fastapi" >nul 2>&1
@@ -290,8 +315,8 @@ echo  ==============================================================
 echo.
 
 REM Rebuild PATH/PYTHONPATH with correct PIP_TARGET (stamp may have overridden it)
-set PATH=%PIP_TARGET%\bin;%PIP_TARGET%;%NPM_PREFIX%\bin;%PATH%
-set PYTHONPATH=%PIP_TARGET%;%PYTHONPATH%
+set "PATH=%PIP_TARGET%\bin;%PIP_TARGET%;%NPM_PREFIX%\bin;%PATH%"
+set "PYTHONPATH=%PIP_TARGET%;%PYTHONPATH%"
 
 REM ---------------------------------------------------------------
 REM  Free ports
