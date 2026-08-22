@@ -1,6 +1,7 @@
 """Ingestion safety: ignore-dirs, binary skip, caps, zip-slip rejection, URL validation."""
 
 import io
+import os
 import zipfile
 
 import pytest
@@ -70,6 +71,87 @@ def test_walk_dir_honors_gitignore(tmp_path):
     assert not any(".eve" in p for p in files)         # gitignored bespoke dir
     # Ignored paths are quietly excluded — NOT counted in the user-facing "skipped" list.
     assert not any(".eve" in s or ".env.local" in s for s in skipped)
+
+
+def _symlink_or_skip(target: str, link: str) -> None:
+    """Create a symlink, or skip the test where the OS/user cannot.
+
+    Linux is the deploy target (infra/fly.toml, infra/docker-compose.yml) and git
+    restores mode-120000 entries as real symlinks there, so this always runs in CI.
+    Unprivileged Windows cannot create them, and git writes a plain text file instead.
+    """
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - platform-gated
+        pytest.skip(f"symlinks unavailable on this platform: {exc}")
+
+
+def test_walk_dir_does_not_follow_a_symlinked_file_out_of_the_tree(tmp_path):
+    # A cloned repo is attacker-controlled content. A committed symlink pointing at the
+    # scanner host's own files must never have its target read into the scan set: the
+    # matched line ends up in Evidence.snippet and is served back by GET /api/scans/{id}.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "id_rsa").write_text(
+        "-----BEGIN RSA PRIVATE KEY-----\nHOSTKEYMATERIAL\n", encoding="utf-8"
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("print('hi')", encoding="utf-8")
+    _symlink_or_skip(str(outside / "id_rsa"), str(repo / "notes.txt"))
+
+    files, _skipped = walk_dir(str(repo))
+
+    assert "main.py" in files
+    assert "notes.txt" not in files
+    assert not any("HOSTKEYMATERIAL" in content for content in files.values())
+
+
+def test_walk_dir_does_not_descend_a_symlinked_directory_out_of_the_tree(tmp_path):
+    # os.walk(followlinks=False) already prunes these, but the containment check must
+    # hold regardless of how the entry was reached — the guard is on the path, not on
+    # one traversal mode.
+    outside = tmp_path / "outside"
+    (outside / "secrets").mkdir(parents=True)
+    (outside / "secrets" / "creds.py").write_text(
+        'AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7REALKEY"', encoding="utf-8"
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("print('hi')", encoding="utf-8")
+    _symlink_or_skip(str(outside / "secrets"), str(repo / "vendored"))
+
+    files, _skipped = walk_dir(str(repo))
+
+    assert "main.py" in files
+    assert not any("AKIAIOSFODNN7REALKEY" in content for content in files.values())
+
+
+def test_walk_dir_still_reads_a_symlink_that_stays_inside_the_tree(tmp_path):
+    # Containment, not a blanket symlink ban: a link to a sibling file in the same
+    # repository is ordinary repository content and must still be scanned.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "real.py").write_text("VALUE = 1", encoding="utf-8")
+    _symlink_or_skip(str(repo / "src" / "real.py"), str(repo / "alias.py"))
+
+    files, _skipped = walk_dir(str(repo))
+
+    assert files.get("alias.py") == "VALUE = 1"
+
+
+def test_read_zip_symlink_entry_yields_only_its_target_path_not_the_host_file(tmp_path):
+    # Pinning the deliberate non-fix: read_zip never extracts, so a symlink entry's
+    # payload is the target path string, not the host file. This must not regress into
+    # "resolve it for convenience".
+    victim = tmp_path / "id_rsa"
+    victim.write_text("-----BEGIN RSA PRIVATE KEY-----\nHOSTKEYMATERIAL\n", encoding="utf-8")
+    data = _zip({"proj/app.py": "a = 1", "proj/notes.txt": str(victim)})
+
+    files, _skipped = read_zip(data)
+
+    assert files["notes.txt"] == str(victim)  # the path, never the contents
+    assert not any("HOSTKEYMATERIAL" in content for content in files.values())
 
 
 def test_read_zip_honors_gitignore():

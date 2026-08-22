@@ -191,6 +191,28 @@ def _collect_dir_ignore_spec(root: str) -> "Optional[pathspec.PathSpec]":
     return _build_ignore_spec(lines)
 
 
+def _within(real_root: str, path: str) -> bool:
+    """True if `path` resolves to somewhere inside `real_root`.
+
+    The scanned tree is attacker-controlled: `clone_repo` restores whatever mode-120000
+    entries the repository committed as real symlinks. ``os.walk`` defaults to
+    ``followlinks=False``, which prunes symlinked *directories* — but a symlinked FILE is
+    yielded as an ordinary name and ``open()`` resolves it, so a committed
+    ``notes.txt -> /root/.ssh/id_rsa`` would read the scanner host's own files into the
+    scan set, where a secret match lands in Evidence.snippet and is served straight back
+    out by GET /api/scans/{id}.
+
+    Compares resolved paths rather than testing ``os.path.islink`` on the leaf, because a
+    plain file reached *through* a symlinked parent is not itself a link and would pass
+    that check.
+    """
+    try:
+        resolved = os.path.realpath(path)
+    except OSError:
+        return False
+    return resolved == real_root or resolved.startswith(real_root + os.sep)
+
+
 def walk_dir(root: str) -> Tuple[Dict[str, str], List[str]]:
     """Read a local directory tree into a {path: content} map (+ skipped list)."""
     if not os.path.isdir(root):
@@ -199,16 +221,24 @@ def walk_dir(root: str) -> Tuple[Dict[str, str], List[str]]:
     skipped: List[str] = []
     total = [0]
     spec = _collect_dir_ignore_spec(root)
+    real_root = os.path.realpath(root)
     for dirpath, dirnames, filenames in os.walk(root):
-        # Prune by the built-in denylist AND the project's own ignore rules.
+        # Prune by the built-in denylist, the project's own ignore rules, AND anything
+        # resolving outside the tree we were handed.
         dirnames[:] = [
             d for d in dirnames
             if d not in IGNORE_DIRS
             and not _ignored_by_spec(spec, os.path.relpath(os.path.join(dirpath, d), root) + "/")
+            and _within(real_root, os.path.join(dirpath, d))
         ]
         for name in filenames:
             abs_path = os.path.join(dirpath, name)
             rel = os.path.relpath(abs_path, root)
+            if not _within(real_root, abs_path):
+                # A link escaping the repository is not repository content at all, so it
+                # is neither "skipped" nor "suppressed" — there was nothing of the user's
+                # to examine. Dropped silently, like a binary file.
+                continue
             if _ignored_by_spec(spec, rel):
                 continue  # quietly ignored (project's .gitignore) — not a "skipped" file
             try:
