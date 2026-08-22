@@ -33,6 +33,6 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
     "tailwindcss-animate": "^1.0.7",
-    "typescript": "^5.3.0"
+    "typescript": "^7.0.2"
   }
 }
