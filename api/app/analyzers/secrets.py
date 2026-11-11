@@ -248,6 +248,24 @@ def _has_key_body(added: list[tuple[int, str]], idx: int) -> bool:
     return False
 
 
+# A substantial base64 run inside the SAME physical line as the BEGIN header — key
+# material crammed into a string literal (how env files and compose embed keys).
+_INLINE_BODY = re.compile(r"[A-Za-z0-9+/]{32,}")
+
+
+def _has_inline_body(after_header: str) -> bool:
+    """True if the text after a BEGIN header on the same physical line carries
+    real-looking key material — a substantial base64 run with no truncation.
+
+    ``after_header`` is everything following the matched header on the line. A
+    truncated skeleton (``-----BEGIN ...\\nMIIEpA...\\n-----END ...``) contains a
+    literal ``...``/`…` where body characters would be, and is never real material.
+    """
+    if "..." in after_header or "…" in after_header:
+        return False
+    return bool(_INLINE_BODY.search(after_header))
+
+
 def _advisory(label: str, match: str, path: str, line: int, note: str) -> Finding:
     """A distinctive token downgraded from CERTAIN to HIGH/advisory (example/doc path
     or placeholder body) — surfaced, but never block-eligible."""
@@ -304,11 +322,27 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                 if _is_allowlisted(_window(content, m.start(), m.end())):
                     matched = True  # a real match existed here; don't also fall through to the generic tier
                     break
-                # A private-key header with no key body following it is illustrative
-                # (a detection pattern in a doc), never a real key → advisory, not block.
-                if label == "private key block" and not _has_key_body(added, idx):
-                    finding = _advisory(label, m.group(0), path, line, "header only, no key body")
-                elif in_test:
+                # A private-key header with no key material anywhere near it — a bare
+                # header quoted in a doc or this detector's own docstring, or a
+                # truncated `...` skeleton in an env value — is structurally not a
+                # secret: nothing to surface on ANY path, and it must never fall
+                # through to _certain below (that would falsely block).
+                if label == "private key block":
+                    multi_line_body = _has_key_body(added, idx)
+                    inline_body = _has_inline_body(content[m.end():])
+                    if not multi_line_body and not inline_body:
+                        matched = True  # a real match existed here; don't also fall through to the generic tier
+                        break
+                    if inline_body and not multi_line_body:
+                        # Real-shaped key material crammed onto one line (an env-var
+                        # string literal). Surfaced as advisory on every path — a
+                        # one-line literal is never upgraded to CERTAIN, so the
+                        # blocking surface is unchanged by this branch.
+                        findings.append(_advisory(label, m.group(0), path, line, "inline one-line key literal"))
+                        matched = True
+                        break
+                    # A multi-line key body follows: real key material — existing tiers.
+                if in_test:
                     finding = _certain_in_test(label, m.group(0), path, line)
                 elif in_example:
                     finding = _advisory(label, m.group(0), path, line, "in an example/template file")
