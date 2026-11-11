@@ -237,3 +237,28 @@ async def test_rate_limit_fails_open_when_redis_down(api, monkeypatch):
     # Redis unavailable → requests still served (availability over hard lockout).
     assert (await client.get("/api/scans")).status_code == 200
     assert (await client.get("/api/scans")).status_code == 200
+
+
+# --- Redis unavailable: new scans fail loudly, never as a silent phantom -------
+
+@pytest.mark.asyncio
+async def test_scan_start_returns_503_and_marks_failed_when_redis_down(api, monkeypatch):
+    """Mutation (2026-11-11): remove the fail_scan call in _safe_enqueue_scan ->
+    the row stays 'queued' and this test fails. The 503 must not leave a phantom
+    pending scan behind."""
+    client, _ = api
+
+    async def boom(scan_id, source, ref):
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(scans_router, "enqueue_scan", boom)
+    resp = await client.post(
+        "/api/scans",
+        json={"source": "url", "url": "https://github.com/psf/requests"},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Scan queue unavailable (Redis not reachable)."
+
+    scans = (await client.get("/api/scans")).json()["scans"]
+    assert len(scans) == 1
+    assert scans[0]["status"] == "failed"

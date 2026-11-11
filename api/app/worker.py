@@ -12,6 +12,8 @@ import json
 import logging
 import os
 
+import redis
+
 from app.analyzers.dependencies import check_dependencies
 from app.analyzers.placeholders import check_placeholders
 from app.analyzers.secrets import check_secrets
@@ -33,7 +35,13 @@ from app.diff import parse_diff
 from app.github_auth import get_installation_token
 from app.github_client import create_check_run, fetch_pr_diff, update_check_run
 from app.ingest import IngestError, clone_repo, read_zip, walk_dir
-from app.queue import SCAN_QUEUE_KEY, WEBHOOK_QUEUE_KEY, get_redis
+from app.queue import (
+    SCAN_QUEUE_KEY,
+    WEBHOOK_QUEUE_KEY,
+    get_redis,
+    ping_redis,
+    reset_redis_client,
+)
 from app.scan import ANALYZER_BUDGET, run_scan
 from app.store import complete_scan, fail_scan, get_settings, mark_running, update_progress
 
@@ -41,6 +49,39 @@ logger = logging.getLogger("worker")
 
 # PR actions worth analyzing (ignore label/assignee/etc. churn).
 RELEVANT_ACTIONS = {"opened", "synchronize", "reopened"}
+
+# Backoff between Redis reconnect attempts (seconds). An unavailable queue is a
+# condition to wait out, never a crash — same invariant as the DB guard below,
+# extended to the queue layer.
+_BACKOFF_SCHEDULE = (1.0, 2.0, 5.0)
+_BACKOFF_CAP_SECONDS = 10.0
+_REDIS_RESET_AFTER_FAILURES = 3
+
+
+class RedisUnavailable(Exception):
+    """Raised when Redis cannot be reached; the worker backs off and retries."""
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Sleep before retry number ``attempt`` (0-based), capped at 10s."""
+    if attempt < len(_BACKOFF_SCHEDULE):
+        return _BACKOFF_SCHEDULE[attempt]
+    return _BACKOFF_CAP_SECONDS
+
+
+async def _safe_brpop(client, timeout: int = 5):
+    """Pop a job; raise RedisUnavailable when Redis itself is unreachable.
+
+    Returns None only on an idle BRPOP expiry (queue empty) — ordinary sleep.
+    The three outcomes (job / idle / unavailable) stay distinguishable so a
+    healthy idle queue is never mistaken for an outage.
+
+    ``client`` (not ``redis``) so the module import isn't shadowed.
+    """
+    try:
+        return await client.brpop([WEBHOOK_QUEUE_KEY, SCAN_QUEUE_KEY], timeout=timeout)
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError) as exc:
+        raise RedisUnavailable(str(exc)) from exc
 
 
 async def analyze_pr(repo: str, pr_number: int, head_sha: str, installation_id: int) -> dict:
@@ -227,11 +268,46 @@ async def run_worker() -> None:
     """Consume both queues forever: PR webhooks → analyze_pr, scan jobs → handle_scan_job."""
     redis = get_redis()
     logger.info("worker started, consuming %s + %s", WEBHOOK_QUEUE_KEY, SCAN_QUEUE_KEY)
+
+    if await ping_redis():
+        logger.info("Redis reachable at %s", settings.redis_url)
+    else:
+        logger.warning(
+            "Redis NOT reachable at %s — retrying in background; scans will queue once it's up",
+            settings.redis_url,
+        )
+
+    consecutive_failures = 0
+    was_down = False
     while True:
-        # brpop on both keys — whichever has work first wins (single loop, no polling race).
-        item = await redis.brpop([WEBHOOK_QUEUE_KEY, SCAN_QUEUE_KEY], timeout=5)
-        if item is None:
+        try:
+            item = await _safe_brpop(redis)
+        except RedisUnavailable:
+            consecutive_failures += 1
+            if not was_down:
+                # Log once per outage, not once per retry.
+                logger.warning(
+                    "Redis unreachable at %s (attempt %d) — backing off; will keep retrying",
+                    settings.redis_url, consecutive_failures,
+                )
+                was_down = True
+            await asyncio.sleep(_backoff_seconds(consecutive_failures - 1))
+            if consecutive_failures >= _REDIS_RESET_AFTER_FAILURES:
+                # A connection that has failed repeatedly may be stale/broken even
+                # after Redis returns — drop it so the next iteration rebuilds.
+                reset_redis_client()
+                redis = get_redis()
+                consecutive_failures = 0
             continue
+
+        if item is None:
+            continue  # idle BRPOP expiry — queue empty, nothing to do
+
+        if was_down:
+            logger.info("Redis connection restored at %s — resuming consumption", settings.redis_url)
+            was_down = False
+        consecutive_failures = 0
+
         key, raw = item
         try:
             job = json.loads(raw)

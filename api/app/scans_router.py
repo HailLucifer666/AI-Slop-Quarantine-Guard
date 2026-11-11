@@ -17,19 +17,37 @@ enqueue a job that can't run. The clone/extract re-validates defensively in ``in
 import os
 import tempfile
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api_security import rate_limit, require_api_key
 from app.config import settings
 from app.ingest import IngestError, validate_clone_url
 from app.queue import enqueue_scan
-from app.store import create_scan, get_scan, list_scans
+from app.store import create_scan, fail_scan, get_scan, list_scans
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
 # Cap the raw upload before buffering it (compressed bytes). The unpacked-size caps
 # live in ingest.read_zip; this just stops an oversized request body up front.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
+async def _safe_enqueue_scan(scan_id: int, source: str, ref: str) -> None:
+    """Enqueue a scan, or fail loudly when Redis is down.
+
+    A scan that cannot be queued must not linger as "queued" forever — mark it
+    failed and 503 so the dashboard never shows a phantom pending scan. Redis
+    being down is a service condition, not an internal error (500).
+    """
+    try:
+        await enqueue_scan(scan_id, source, ref)
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError):
+        await fail_scan(scan_id, "queue unavailable: redis unreachable")
+        raise HTTPException(
+            status_code=503,
+            detail="Scan queue unavailable (Redis not reachable).",
+        )
 
 
 @router.post("", status_code=202, dependencies=[Depends(require_api_key), Depends(rate_limit)])
@@ -67,7 +85,7 @@ async def _start_url_scan(body: dict) -> dict:
     except IngestError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     scan_id = await create_scan("url", url)
-    await enqueue_scan(scan_id, "url", url)
+    await _safe_enqueue_scan(scan_id, "url", url)
     return {"scan_id": scan_id}
 
 
@@ -78,7 +96,7 @@ async def _start_local_scan(body: dict) -> dict:
     if not path or not os.path.isdir(path):
         raise HTTPException(status_code=400, detail="path must be an existing directory")
     scan_id = await create_scan("local", path)
-    await enqueue_scan(scan_id, "local", path)
+    await _safe_enqueue_scan(scan_id, "local", path)
     return {"scan_id": scan_id}
 
 
@@ -102,7 +120,7 @@ async def _start_zip_scan(request: Request) -> dict:
     filename = getattr(upload, "filename", None) or "upload.zip"
     try:
         scan_id = await create_scan("zip", filename)
-        await enqueue_scan(scan_id, "zip", tmp_path)
+        await _safe_enqueue_scan(scan_id, "zip", tmp_path)
     except Exception:
         # Don't leak the spooled upload if the DB insert or Redis enqueue fails.
         os.unlink(tmp_path)

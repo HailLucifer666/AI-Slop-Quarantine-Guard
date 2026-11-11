@@ -8,13 +8,14 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
+import redis
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.db.session import init_db
-from app.queue import already_seen, enqueue_webhook_delivery
+from app.queue import already_seen, enqueue_webhook_delivery, ping_redis
 from app.scans_router import router as scans_router
 from app.crew_router import router as crew_router
 from app.audit_router import router as audit_router
@@ -50,8 +51,9 @@ app.include_router(settings_router)
 
 @app.get("/healthz")
 async def healthz():
-    """Health check endpoint."""
-    return {"status": "ok"}
+    """Health check endpoint. redis=false means the worker is retrying in the
+    background — not that the API is broken (Redis is a soft dependency)."""
+    return {"status": "ok", "redis": await ping_redis()}
 
 
 @app.post("/webhooks/github")
@@ -78,14 +80,21 @@ async def github_webhook(request: Request):
     if not delivery_guid:
         raise HTTPException(status_code=400, detail="missing X-GitHub-Delivery header")
 
-    # 2. Idempotency — GitHub retries on timeout/5xx, so dedupe before enqueue.
-    if await already_seen(delivery_guid):
-        logger.info("duplicate delivery ignored: %s", delivery_guid)
-        return JSONResponse({"status": "duplicate"}, status_code=200)
+    # 2/3. Idempotency + enqueue — both need Redis. When Redis is down we 503 so
+    # GitHub retries the delivery later; the worker is already backing off and will
+    # drain the queue once Redis returns (never fail the request with a 500 traceback).
+    try:
+        if await already_seen(delivery_guid):
+            logger.info("duplicate delivery ignored: %s", delivery_guid)
+            return JSONResponse({"status": "duplicate"}, status_code=200)
 
-    # 3. Enqueue the raw delivery and return immediately. Zero analysis here.
-    payload = json.loads(raw_body)
-    await enqueue_webhook_delivery(delivery_guid, event, payload)
+        payload = json.loads(raw_body)
+        await enqueue_webhook_delivery(delivery_guid, event, payload)
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError):
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook processing unavailable (Redis not reachable).",
+        )
     logger.info("enqueued delivery=%s event=%s", delivery_guid, event)
 
     return JSONResponse({"status": "accepted"}, status_code=202)

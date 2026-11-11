@@ -55,8 +55,35 @@ def _post(client, body: bytes, *, sig: str | None = None, guid: str = "guid-1", 
     return client.post("/webhooks/github", content=body, headers=headers)
 
 
-def test_healthz(client):
-    assert client.get("/healthz").json() == {"status": "ok"}
+def test_healthz_reports_redis_state(client, monkeypatch):
+    """Redis is a soft dependency: /healthz tells the truth about it instead of
+    pretending everything is fine. Mutation (2026-11-11): revert healthz to the
+    static {"status": "ok"} -> this test fails."""
+    async def ping_false() -> bool:
+        return False
+
+    async def ping_true() -> bool:
+        return True
+
+    monkeypatch.setattr(main, "ping_redis", ping_false)
+    assert client.get("/healthz").json() == {"status": "ok", "redis": False}
+
+    monkeypatch.setattr(main, "ping_redis", ping_true)
+    assert client.get("/healthz").json() == {"status": "ok", "redis": True}
+
+
+def test_webhook_returns_503_when_redis_down(client, monkeypatch):
+    """Redis down → 503, not 500: GitHub retries the delivery later, and the
+    worker drains the queue once Redis returns. Mutation (2026-11-11): remove
+    the except in github_webhook -> a 500 traceback instead of this 503."""
+    async def boom(guid: str) -> bool:
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(main, "already_seen", boom)
+    body = json.dumps({"action": "opened"}).encode()
+    resp = _post(client, body)
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Webhook processing unavailable (Redis not reachable)."
 
 
 def test_valid_event_enqueued_202(client):
