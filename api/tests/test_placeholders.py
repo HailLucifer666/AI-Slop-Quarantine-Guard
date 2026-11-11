@@ -31,6 +31,16 @@ async def test_lowercase_todo_flagged():
 
 
 @pytest.mark.asyncio
+async def test_prose_todo_without_colon_not_flagged():
+    # The word "todo" inside a normal sentence ("there is still todo work") is prose,
+    # not a stub marker. Only the marker form TODO: (with colon, any case) flags —
+    # this kills the docstring-prose false alarms of self-scan #15. FIXME/XXX keep
+    # their bare-word behavior (pinned by the tests below).
+    findings = await check_placeholders(_diff("app/auth.py", ["    # there is still todo work before launch"]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
 async def test_lowercase_fixme_flagged():
     findings = await check_placeholders(_diff("app/auth.py", ["    // fixme later"]), {})
     assert len(findings) == 1
@@ -143,4 +153,47 @@ async def test_todo_inside_string_literal_not_flagged():
 @pytest.mark.asyncio
 async def test_fixme_inside_js_string_not_flagged():
     findings = await check_placeholders(_diff("ui.js", ["  const msg = 'FIXME: handle edge';"]), {})
+    assert findings == []
+
+
+# --- pinned known self-reference advisory ------------------------------------
+
+# The detector's own source names its patterns in prose. Bare XXX in that prose
+# cannot be separated from slop XXX by any sound pattern (a prose sentence and
+# `// XXX fix this` have the same shape), and repo-side ignore markers are
+# forbidden by the scanner-adapts principle (DECISIONS.md ADR, 2026-11-12). So the
+# self-scan of this repo keeps exactly ONE advisory self-reference hit: line 39 of
+# placeholders.py, where the regex's comment explains what XXX excludes. The
+# scanner flagging its own documentation is the scanner proving it works.
+_KNOWN_SELF_REFERENCE_LINE = (
+    "# signal as uppercase ones. XXX excludes a following \"-<digit-or-X>\" — that"
+)
+
+
+@pytest.mark.asyncio
+async def test_known_self_reference_advisory_is_pinned():
+    """Pins the one accepted self-scan advisory (placeholders.py prose XXX). If this
+    test fails, the line moved or the rule changed: re-derive the expected count
+    from a real rescan and update this pin with its reason — never delete it to
+    make a scan look clean."""
+    findings = await check_placeholders(_diff("app/analyzers/placeholders.py", [
+        _KNOWN_SELF_REFERENCE_LINE,
+    ]), {})
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "SQG003"
+    assert f.confidence is Confidence.MEDIUM
+    assert f.block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_detector_prose_lines_without_xxx_stay_silent():
+    # The other prose lines that name the patterns (line 38's quoted "todo"/"fixme",
+    # the docstring's TODO mentions) produce NO findings — only the bare XXX prose
+    # in the line above is a self-reference hit.
+    findings = await check_placeholders(_diff("app/analyzers/placeholders.py", [
+        '# Case-insensitive: lowercase "todo"/"fixme" comments are just as real a',
+        'Scans newly added lines for the tells of unfinished or stubbed-out code: TODO',
+        '# file pattern, not a TODO marker. Skip them by basename.',
+    ]), {})
     assert findings == []

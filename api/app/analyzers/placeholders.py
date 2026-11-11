@@ -35,11 +35,12 @@ _ALLOWLIST = ("# noqa", "# type: ignore", "# pragma: no cover")
 _PATTERNS: list[tuple[str, re.Pattern]] = [
     (
         "TODO/FIXME marker",
-        # Case-insensitive: lowercase "todo"/"fixme" comments are just as real a
-        # signal as uppercase ones. XXX excludes a following "-<digit-or-X>" — that
-        # shape is a ticket-ID prefix (XXX-1234) or a masked value (XXX-XX-XXXX),
-        # not a placeholder marker.
-        re.compile(r"\b(?:TODO|FIXME|HACK)\b|\bXXX\b(?!-[\dXx])", re.IGNORECASE),
+        # TODO requires its marker form — a colon (any case), so prose that merely
+        # MENTIONS todo ("there is still todo work") is not a stub. FIXME/HACK keep
+        # their bare-word behavior: lowercase "fixme later" is pinned as a real
+        # signal. XXX excludes a following "-<digit-or-X>" — that shape is a
+        # ticket-ID prefix (XXX-1234) or a masked value (XXX-XX-XXXX), not a marker.
+        re.compile(r"\bTODO\s*:|\b(?:FIXME|HACK)\b|\bXXX\b(?!-[\dXx])", re.IGNORECASE),
     ),
     (
         "not-implemented stub",
