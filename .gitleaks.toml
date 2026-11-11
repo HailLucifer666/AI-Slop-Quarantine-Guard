@@ -1,0 +1,10 @@
+# Gitleaks config — allowlist for intentional secret-shaped strings in tests.
+# The test suite deliberately embeds fake AWS tokens (test_secrets.py, proof
+# corpus fixtures) to prove detection works; those are not real credentials.
+title = "AI Slop Quarantine Guard gitleaks config"
+
+[allowlist]
+  description = "Intentional secret-shaped fixtures under api/tests/"
+  paths = [
+    '''(?i)^api/tests/''',
+  ]

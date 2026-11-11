@@ -42,6 +42,10 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      # Fail-closed config defaults to production; the suite needs the dev
+      # defaults (no webhook secret / API key) to even import.
+      ENVIRONMENT: development
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
