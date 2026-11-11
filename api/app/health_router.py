@@ -25,7 +25,7 @@ from sqlalchemy import func, select
 from app.db.models import Scan
 from app.db.session import async_session, engine
 from app.engines import availability
-from app.queue import SCAN_QUEUE_KEY, get_redis
+from app.queue import SCAN_QUEUE_KEY, _await_result, get_redis
 from app.store import STALE_LEASE_SECONDS, get_worker_heartbeat
 
 logger = logging.getLogger("health")
@@ -63,7 +63,7 @@ async def _redis_status() -> dict:
         client = get_redis()
         await client.ping()
         status["latency_ms"] = round((time.monotonic() - started) * 1000, 1)
-        status["scan_queue_depth"] = await client.llen(SCAN_QUEUE_KEY)
+        status["scan_queue_depth"] = await _await_result(client.llen(SCAN_QUEUE_KEY))
         status["reachable"] = True
     except Exception as exc:  # noqa: BLE001
         status["error"] = str(exc)[:300]

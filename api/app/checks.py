@@ -279,7 +279,7 @@ def format_review_comment(finding: Finding) -> str:
             remediation.text,
             "",
             "```suggestion",
-            remediation.suggested_replacement.rstrip("\n"),
+            (remediation.suggested_replacement or "").rstrip("\n"),
             "```",
         ]
         if remediation.basis:

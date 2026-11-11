@@ -377,6 +377,10 @@ async def check_vulnerabilities(
     repo = repo_context.get("repo")
     head_sha = repo_context.get("head_sha")
     token = repo_context.get("token")
+    # repo_context values come from a plain dict; narrow before using them as str.
+    assert isinstance(repo, str)
+    assert isinstance(head_sha, str)
+    assert isinstance(token, str)
 
     added_by_file: dict[str, List[Tuple[int, str]]] = {}
     for path, line, content in parse_diff(diff):
@@ -390,19 +394,25 @@ async def check_vulnerabilities(
             is_lock = lock_eco in _OSV_ECOSYSTEM
             versioned_eco = versioned_manifest_ecosystem(path)
             is_versioned = not is_lock and versioned_eco in _OSV_ECOSYSTEM
+            if is_versioned:
+                # Narrow for mypy: membership above implies a real ecosystem string.
+                assert versioned_eco is not None
             if not is_lock and not is_versioned and manifest_ecosystem(path) not in _OSV_ECOSYSTEM:
                 continue
             content = await fetch_file(repo, path, head_sha, token)
             if content is None:
                 continue  # unfetchable manifest → silent (protects zero-FP)
 
+            pins: list[tuple[str, str, str]]
             if is_lock:
                 # Lockfile: the fully resolved tree, all pinned exactly.
+                assert lock_eco is not None
                 pins = [(lock_eco, n, v) for n, v in extract_pinned_lockfile(path, content)]
                 locate = _find_lock_line
             elif is_versioned:
                 # go.mod / pom.xml / build.gradle / *.csproj — literal versions only;
                 # whatever the parser could not resolve is simply absent here.
+                assert versioned_eco is not None
                 pins = [(versioned_eco, n, v) for n, v in parse_pins(path, content).pins]
                 locate = _find_versioned_line
             else:
@@ -410,10 +420,10 @@ async def check_vulnerabilities(
                 locate = _find_line
 
             for dep_eco, name, version in pins:
-                line = locate(name, version, added)
-                if line is None:
+                found_line = locate(name, version, added)
+                if found_line is None:
                     continue  # pin wasn't introduced by this PR
-                occurrences.append((path, line, (dep_eco, name, version)))
+                occurrences.append((path, found_line, (dep_eco, name, version)))
 
         # Dedupe to unique pins (lockfiles repeat heavily); cap + log so a giant tree
         # can never silently drop coverage or stall the scan.

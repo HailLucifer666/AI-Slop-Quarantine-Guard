@@ -146,22 +146,22 @@ async def check_typosquat(diff: str, repo_context: dict) -> List[Finding]:
         ecosystem = manifest_ecosystem(path)
         if ecosystem not in POPULAR_BY_ECOSYSTEM:
             continue
-        content = await fetch_file(path)
-        if not content:
+        body = await fetch_file(path)
+        if not body:
             continue  # can't parse → stay silent (protects zero-FP bar)
 
         seen: set[str] = set()
-        for name in extract_dependency_names(path, content):
+        for name in extract_dependency_names(path, body):
             if name in seen:
                 continue
-            line = _name_present(name, added)
-            if line is None:
+            line_no = _name_present(name, added)
+            if line_no is None:
                 continue  # declared but not touched in this PR
             seen.add(name)
             target = _closest_popular(ecosystem, _normalize(ecosystem, name))
             if target is None:
                 continue
-            snippet = next(c for ln, c in added if ln == line)
-            findings.append(_finding(name, target, path, line, snippet))
+            snippet = next(c for ln, c in added if ln == line_no)
+            findings.append(_finding(name, target, path, line_no, snippet))
 
     return findings

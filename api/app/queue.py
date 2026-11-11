@@ -8,11 +8,28 @@ RedisUnavailable contract in worker.py).
 """
 
 import asyncio
+import collections.abc
 import json
+from typing import Awaitable, TypeVar
 
 import redis.asyncio as aioredis
 
 from app.config import settings
+
+_T = TypeVar("_T")
+
+
+async def _await_result(value: Awaitable[_T] | _T) -> _T:
+    """Await a redis command result whose stubs union ``Awaitable[T] | T``.
+
+    redis's shared sync/async mixin types list commands (lpush, rpoplpush,
+    lrem, llen, …) as ``Union[Awaitable[T], T]``. ``await`` on that union is
+    rejected by mypy ([misc]); this unwraps the actual value instead of using
+    per-call ``# type: ignore`` suppressions.
+    """
+    if isinstance(value, collections.abc.Awaitable):
+        return await value
+    return value
 
 WEBHOOK_QUEUE_KEY = "slopguard:webhook_queue"
 SCAN_QUEUE_KEY = "slopguard:scan_queue"
@@ -101,7 +118,7 @@ async def release_delivery(delivery_guid: str) -> None:
 async def enqueue_webhook_delivery(delivery_guid: str, event: str, payload: dict) -> None:
     """Push a raw webhook delivery onto the Redis queue for the worker (Phase 2)."""
     job = json.dumps({"delivery_guid": delivery_guid, "event": event, "payload": payload})
-    await get_redis().lpush(WEBHOOK_QUEUE_KEY, job)
+    await _await_result(get_redis().lpush(WEBHOOK_QUEUE_KEY, job))
 
 
 async def enqueue_scan(scan_id: int, source: str, ref: str) -> None:
@@ -111,7 +128,7 @@ async def enqueue_scan(scan_id: int, source: str, ref: str) -> None:
     temp zip path written by the upload endpoint.
     """
     job = json.dumps({"kind": "scan", "scan_id": scan_id, "source": source, "ref": ref})
-    await get_redis().lpush(SCAN_QUEUE_KEY, job)
+    await _await_result(get_redis().lpush(SCAN_QUEUE_KEY, job))
 
 
 # (source queue key, its processing-list key) pairs the worker polls in
@@ -126,13 +143,13 @@ QUEUE_PAIRS = (
 async def reserve_job(source_key: str, processing_key: str) -> str | None:
     """Atomically move one job (if any) from `source_key` to `processing_key`,
     returning its raw JSON, or None if the source is empty right now."""
-    return await get_redis().rpoplpush(source_key, processing_key)
+    return await _await_result(get_redis().rpoplpush(source_key, processing_key))
 
 
 async def ack_job(processing_key: str, raw: str) -> None:
     """Remove a job from its processing list once it's been fully handled
     (successfully or with its failure recorded) — never before."""
-    await get_redis().lrem(processing_key, 1, raw)
+    await _await_result(get_redis().lrem(processing_key, 1, raw))
 
 
 async def recover_orphaned_jobs() -> int:
@@ -145,7 +162,7 @@ async def recover_orphaned_jobs() -> int:
     recovered = 0
     for source_key, processing_key in QUEUE_PAIRS:
         while True:
-            raw = await redis.rpoplpush(processing_key, source_key)
+            raw = await _await_result(redis.rpoplpush(processing_key, source_key))
             if raw is None:
                 break
             recovered += 1

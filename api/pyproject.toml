@@ -41,3 +41,12 @@ packages = ["app"]
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+
+[tool.mypy]
+# The SQLAlchemy mypy plugin makes Column(...) attributes type as their value
+# type (Column[str] behaves as str), which is the sanctioned way to type SA 2.0
+# models. Without it, every store.py assignment/return/arg on a model attribute
+# errors as Column[T] vs T.
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+python_version = "3.12"        # matches CI (job: mypy api/app)
+warn_unused_ignores = true    # keep every suppression honest

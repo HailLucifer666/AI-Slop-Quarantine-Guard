@@ -165,13 +165,13 @@ def take_census(files: Dict[str, str]) -> Census:
         elif base in _UNSUPPORTED_MANIFESTS:
             census.unreadable_manifests[path] = _UNSUPPORTED_MANIFESTS[base]
         else:
-            ecosystem = versioned_manifest_ecosystem(path)
-            if ecosystem:
-                census.versioned_manifests[path] = ecosystem
+            versioned_eco = versioned_manifest_ecosystem(path)
+            if versioned_eco:
+                census.versioned_manifests[path] = versioned_eco
                 # A Gradle version catalog, an inherited Maven property or a NuGet
                 # range means some dependency in this file has no determinable version.
                 if parse_pins(path, files[path]).unresolved:
-                    census.range_ecosystems.add(ecosystem)
+                    census.range_ecosystems.add(versioned_eco)
 
     # An ecosystem covered by one file is not "unreadable" because another of its files
     # is: a repo with Gemfile *and* Gemfile.lock is fully readable via the lock, and

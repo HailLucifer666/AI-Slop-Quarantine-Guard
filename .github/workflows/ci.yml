@@ -37,8 +37,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e api[dev] mypy==1.19.1
-      - run: mypy api/app
+      # The SQLAlchemy mypy plugin lives in 2.0.x; SQLAlchemy 2.1 removed
+      # sqlalchemy.ext.mypy. This job only type-checks — pin 2.0.51 so the
+      # plugin (and [tool.mypy]) load. Runtime/test jobs keep latest SA.
+      - run: pip install -e api[dev] "sqlalchemy==2.0.51" mypy==1.19.1
+      # Run from api/ so mypy finds [tool.mypy] in api/pyproject.toml
+      # (config discovery walks up from the CWD, not down from the repo root).
+      - run: cd api && mypy app
 
   test:
     runs-on: ubuntu-latest
