@@ -139,6 +139,14 @@ def _is_sequential_placeholder(v: str) -> bool:
 _SLUG_VALUE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _CONST_VALUE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+# A quoted value that reads as an English phrase — letters, spaces, apostrophes,
+# hyphens, optional sentence punctuation, never a digit or symbol — is a UI label
+# or a human sentence, not a credential (a dashboard's `secrets: "Leaked secrets"`
+# label). Quoted tier only. Real credential values are space-free; passphrases are
+# the exception, and are recognized by NAME so they keep surfacing.
+_PROSE_VALUE = re.compile(r"^[A-Za-z][A-Za-z' \-]*[.!?]?$")
+_PASSPHRASE_NAME = re.compile(r"pass(?:word|wd|phrase)|pwd", re.IGNORECASE)
+
 
 def _looks_nonsecret_value(value: str) -> bool:
     v = value.strip()
@@ -160,6 +168,14 @@ def _looks_nonsecret_value(value: str) -> bool:
     if _CONST_VALUE.match(v):
         return True
     return False
+
+
+def _is_prose_value(value: str) -> bool:
+    """True if a quoted value reads as an English phrase: it contains a space and
+    only letters, apostrophes, hyphens and optional sentence punctuation — no
+    digits, no symbols. Passphrase-named keys are exempt at the call site, since a
+    passphrase is the one credential whose value legitimately contains spaces."""
+    return " " in value and bool(_PROSE_VALUE.match(value))
 
 
 def _is_allowlisted(line: str) -> bool:
@@ -356,9 +372,14 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
             if matched:
                 continue  # one finding per line; CERTAIN wins over HIGH
 
-            a = _ASSIGNMENT.search(content) or (
-                _ASSIGNMENT_UNQUOTED.search(content) if _DOTENV_PATH.search(path) else None
-            )
+            a = _ASSIGNMENT.search(content)
+            if a is not None and _is_prose_value(a.group("value")) and not _PASSPHRASE_NAME.search(a.group("name")):
+                # Quoted tier only: an English-phrase value is a UI label or human
+                # string, not a credential. Unquoted .env values with spaces stay
+                # advisory — there they are genuinely ambiguous.
+                continue
+            if a is None:
+                a = _ASSIGNMENT_UNQUOTED.search(content) if _DOTENV_PATH.search(path) else None
             if a:
                 # Generic credential-named assignments are FP-prone. Skip them in
                 # test/example/doc/compose paths (fixtures, not leaks), values that

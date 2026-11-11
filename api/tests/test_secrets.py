@@ -258,6 +258,40 @@ async def test_generic_password_advisory():
     assert f.block_eligible is False
 
 
+# --- prose values: English-phrase values are labels, not credentials --------
+
+@pytest.mark.asyncio
+async def test_prose_ui_label_value_not_flagged():
+    # A dashboard label whose KEY happens to contain "secret" — the VALUE is an
+    # English phrase (spaces, no digits, no symbols), not a credential. This exact
+    # line was a self-scan #15 false alarm on web/components/wall/panels/AnimatedScan.tsx.
+    findings = await check_secrets(_diff("web/components/wall/panels/AnimatedScan.tsx", [
+        '  secrets: "Leaked secrets",',
+    ]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_prose_sentence_value_not_flagged():
+    findings = await check_secrets(_diff("app/config.py", [
+        'secret_note = "rotate this credential soon"',
+    ]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_passphrase_named_keys_still_flagged():
+    """KEEPER against recall loss: passphrases are the one credential class whose
+    values legitimately contain spaces — a password/passphrase-named key with a
+    spacey value must still surface as HIGH advisory."""
+    findings = await check_secrets(_diff("app/config.py", [
+        'password = "correct horse battery staple"',
+    ]), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+
+
 # --- zero-FP controls ------------------------------------------------------
 
 @pytest.mark.asyncio
