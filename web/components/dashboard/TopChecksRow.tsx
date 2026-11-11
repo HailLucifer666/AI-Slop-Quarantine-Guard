@@ -13,6 +13,8 @@ const RULE_COLOR: Record<string, string> = {
   SQG004: "var(--sev-high)",
   SQG005: "var(--sev-high)",
   SQG006: "var(--sev-high)",
+  SQG007: "var(--sev-medium)",
+  SQG009: "var(--sev-medium)",
 }
 
 /**

@@ -1,6 +1,10 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # A crashed container must come back on its own. When the worker stays down,
+    # scans queue up forever and the dashboard keeps showing the last COMPLETED
+    # scan as if it were current — the stale-results failure mode.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: password
@@ -12,18 +16,21 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
 
   api:
     build:
       context: ../api
+    restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://app:password@postgres:5432/app
       REDIS_URL: redis://redis:6379
+      ENVIRONMENT: development
       GITHUB_WEBHOOK_SECRET: dev_secret
       GITHUB_APP_ID: dev_app_id
       GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds9s00...\n-----END RSA PRIVATE KEY-----"
@@ -36,10 +43,12 @@ services:
   worker:
     build:
       context: ../api
+    restart: unless-stopped
     command: python -m app.worker
     environment:
       DATABASE_URL: postgresql+asyncpg://app:password@postgres:5432/app
       REDIS_URL: redis://redis:6379
+      ENVIRONMENT: development
       GITHUB_WEBHOOK_SECRET: dev_secret
       GITHUB_APP_ID: dev_app_id
       GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds9s00...\n-----END RSA PRIVATE KEY-----"
@@ -50,6 +59,7 @@ services:
       - ../api:/app
 
   web:
+    restart: unless-stopped
     build:
       context: ../web
       args:

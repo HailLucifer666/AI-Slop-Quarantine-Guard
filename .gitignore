@@ -21,8 +21,13 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to the repo root on purpose. These come from the Python packaging
+# template (setuptools build output), but unanchored they also match web/lib/ —
+# which is TypeScript SOURCE, not build output. That silently kept the dashboard's
+# entire data layer (api.ts, types.ts, useWallData.ts, …) out of version control,
+# so a fresh clone could not build the web app.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -59,3 +64,11 @@ Dashbaord Design.md.txt
 CLAUDE.md
 Instructions.md
 GIT Dashboard UI.png
+
+# Coverage artifacts (pytest-cov output) — regenerated on every run.
+.coverage
+coverage.xml
+htmlcov/
+
+# Local package cache created by start.bat when the configured PKG_ROOT drive is absent.
+.pkgcache/

@@ -5,20 +5,21 @@ Settings page. Saving persists intent only — enforcement (blocking) is Phase 9
 Validation lives here at the boundary; store.update_settings filters defensively too.
 """
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api_security import rate_limit, require_api_key
 from app.store import RETENTION_CHOICES, RULE_IDS, get_settings, update_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_api_key), Depends(rate_limit)])
 async def read_settings():
     """Current global gate settings (seeds defaults on first read)."""
     return await get_settings()
 
 
-@router.patch("")
+@router.patch("", dependencies=[Depends(require_api_key), Depends(rate_limit)])
 async def patch_settings(request: Request):
     """Partial-update the settings. Validates each provided field at the boundary."""
     try:
@@ -35,7 +36,7 @@ async def patch_settings(request: Request):
         rules = body["blocked_rules"]
         if not isinstance(rules, list) or any(r not in RULE_IDS for r in rules):
             raise HTTPException(
-                status_code=400, detail="blocked_rules must be a subset of SQG001..SQG006"
+                status_code=400, detail="blocked_rules must be a subset of SQG001..SQG007"
             )
 
     if "retention_days" in body:

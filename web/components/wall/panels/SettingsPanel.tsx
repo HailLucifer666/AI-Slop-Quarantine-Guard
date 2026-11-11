@@ -84,7 +84,14 @@ export function SettingsPanel() {
 
       <section className="wall-card p-5">
         <div className="font-display text-base font-semibold" style={{ color: "var(--wall-text)" }}>Retention</div>
-        <p className="mb-3 mt-1 text-sm" style={{ color: "var(--wall-muted)" }}>Scans older than this are deleted automatically.</p>
+        {/* Previously claimed "Scans older than this are deleted automatically." Nothing in
+            the codebase reads retention_days to delete anything, so that was a false promise
+            about the user's own data. Worded like the block-mode note above until enforcement
+            is actually built and opted into. */}
+        <p className="mb-3 mt-1 text-sm" style={{ color: "var(--wall-muted)" }}>
+          Saved preference only — nothing is deleted yet. No scan has ever been removed
+          automatically; deletion ships as an explicit opt-in.
+        </p>
         <div className="flex gap-2">
           {RETENTION.map((d) => (
             <button key={d} onClick={() => patch({ retention_days: d })} className="wall-focus rounded-md px-4 py-2 text-sm" style={{ border: `1px solid ${s.retention_days === d ? "var(--wall-cyan)" : "var(--wall-line)"}`, color: s.retention_days === d ? "var(--wall-text)" : "var(--wall-muted)" }}>

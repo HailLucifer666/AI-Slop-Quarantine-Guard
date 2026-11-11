@@ -76,7 +76,9 @@ Each check has a permanent ID (a "Rule ID") so you can reference, suppress, or c
 | **SQG004** | Known-vulnerable dependency (CVE match — a published security flaw in a package version you're using) | HIGH — the match is factual, but "your code is exploitable" requires deeper analysis we don't do yet | Never blocks (advisory) |
 | **SQG005** | Risky or incompatible license (e.g., GPL in a commercial product) | HIGH | Never blocks |
 | **SQG006** | Outdated dependency | HIGH | Never blocks |
-| **SQG007** | AI scratchpad committed by accident (`<thinking>` blocks, plan dumps) | HIGH — but narrow regex, text/markdown files only | **Off by default** |
+| **SQG007** | Typosquatted dependency name (`reqeusts` for `requests`) | HIGH — a suspicion about intent, never a provable fact | Always on, advisory only, never blocks |
+| **SQG008** | AI scratchpad committed by accident (`<thinking>` blocks, plan dumps) | HIGH — but narrow regex, text/markdown files only | **Not implemented** (was mis-numbered SQG007; see CHECKS_CATALOG.md) |
+| **SQG009** | Avoidable complexity — several lines of code that one equivalent line replaces | MEDIUM — the shorter form is derived from the syntax tree and shown verbatim, but taking it is a judgement | Never blocks (advisory) |
 
 **Confidence levels explained:**
 - **CERTAIN** = a reproducible, independently verifiable fact. Eligible to block (when user opts in).
@@ -106,7 +108,7 @@ Each check has a permanent ID (a "Rule ID") so you can reference, suppress, or c
 ### In scope (full v1 — all phases)
 
 - GitHub pull request analysis via GitHub App (webhook-based)
-- All six checks (SQG001–SQG006), SQG007 off by default
+- All eight shipped checks (SQG001–SQG007 and SQG009); SQG008 is specified but not implemented
 - GitHub Checks API output (findings visible directly on the PR)
 - AI Crew plain-English explanations and fix suggestions (Phase 7)
 - Dashboard: login, repo list, PR history, analysis detail

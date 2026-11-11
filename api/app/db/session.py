@@ -3,11 +3,15 @@
 Uses SQLAlchemy 2.0 async with asyncio.
 """
 
+import logging
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from typing import AsyncGenerator
 
 from ..config import settings
+
+logger = logging.getLogger("db.session")
 
 
 def _to_async_url(url: str) -> str:
@@ -47,19 +51,44 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+# Columns added after their table first shipped. create_all() won't alter an existing
+# table, so each is applied idempotently on startup: ADD COLUMN works on both SQLite
+# and Postgres, and re-adding raises, which we swallow. Append-only — never reorder or
+# remove an entry, since an older database may still need every earlier one.
+_ADDED_COLUMNS = (
+    ("scans", "progress", "TEXT"),
+    ("scans", "heartbeat_at", "TIMESTAMP"),
+    ("scans", "coverage_json", "TEXT"),
+    ("scans", "groups_json", "TEXT"),
+    ("scans", "resolved_sha", "VARCHAR"),
+    ("scans", "content_hash", "VARCHAR"),
+    ("scans", "file_count", "INTEGER"),
+    ("scans", "ingested_at", "TIMESTAMP"),
+    ("scans", "engine_versions_json", "TEXT"),
+    ("scans", "suppressed_json", "TEXT"),
+)
+
+
 async def init_db():
     """Initialize database (create tables) + lightweight column migrations."""
     from .models import Base
+    from .diagnostics import log_stray_databases
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Idempotent add of columns introduced after a table first shipped, so an
-        # existing app.db keeps working without a migration tool (create_all won't
-        # alter an existing table). ADD COLUMN is supported by SQLite and Postgres;
-        # a duplicate raises, which we swallow.
-        try:
-            await conn.exec_driver_sql("ALTER TABLE scans ADD COLUMN progress TEXT")
-        except Exception:
-            pass  # column already exists
+        for table, column, coltype in _ADDED_COLUMNS:
+            try:
+                await conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+            except Exception:
+                pass  # column already exists
+        # State which database is live, in absolute terms. When the API and worker
+        # disagree about this path the dashboard silently serves another file's rows,
+        # so it must be greppable in the logs of both processes.
+        scans = (await conn.exec_driver_sql("SELECT COUNT(*) FROM scans")).scalar()
+        logger.info(
+            "database resolved: %s (dialect=%s, scans=%s rows)",
+            engine.url.database, engine.dialect.name, scans,
+        )
+    log_stray_databases()
 
 
 async def close_db():

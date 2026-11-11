@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import main, store
+from app.config import settings
 from app.db.models import Base
 
 
@@ -46,6 +47,15 @@ async def test_patch_roundtrip_and_persist(env):
 
 
 @pytest.mark.asyncio
+async def test_sqg007_settable(env):
+    """SQG007 (typosquat) is a real analyzer whose category permits block-eligibility;
+    the owner must be able to opt it into blocked_rules like any other rule."""
+    resp = await env.patch("/api/settings", json={"blocked_rules": ["SQG001", "SQG007"]})
+    assert resp.status_code == 200
+    assert resp.json()["blocked_rules"] == ["SQG001", "SQG007"]
+
+
+@pytest.mark.asyncio
 async def test_invalid_retention_rejected(env):
     resp = await env.patch("/api/settings", json={"retention_days": 7})
     assert resp.status_code == 400
@@ -62,3 +72,16 @@ async def test_update_is_audited(env):
     await env.patch("/api/settings", json={"block_mode": True})
     rows = await store.list_audit()
     assert any(r["action"] == "settings.updated" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_settings_requires_api_key_when_configured(env, monkeypatch):
+    # Unauthenticated settings mutation would let anyone silently disable/alter
+    # enforcement config — must be gated exactly like scan creation.
+    monkeypatch.setattr(settings, "api_key", "s3cr3t")
+    assert (await env.get("/api/settings")).status_code == 401
+    assert (await env.patch("/api/settings", json={"block_mode": True})).status_code == 401
+
+    headers = {"X-API-Key": "s3cr3t"}
+    assert (await env.get("/api/settings", headers=headers)).status_code == 200
+    assert (await env.patch("/api/settings", json={"block_mode": True}, headers=headers)).status_code == 200

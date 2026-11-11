@@ -54,6 +54,19 @@ fromgit = { git = "https://example.com/x.git" }
     assert "mylocal" not in names and "fromgit" not in names
 
 
+def test_pyproject_pep508_direct_reference_not_registry_checked():
+    """A PEP 508 direct URL reference ('name @ https://...') installs from that
+    URL, not the registry — extracting the name and existence-checking it against
+    PyPI would false-block a real, legitimately-installed private dependency."""
+    content = """
+[project]
+dependencies = ["mycompany-tool @ https://internal.corp/mycompany-tool.tar.gz", "requests"]
+"""
+    names = parse_pyproject_toml(content)
+    assert "mycompany-tool" not in names
+    assert "requests" in names
+
+
 def test_package_json_sections_and_filters():
     content = """
 {

@@ -7,6 +7,7 @@ pushed.
 """
 
 import io
+import json
 import os
 import zipfile
 
@@ -154,6 +155,37 @@ async def test_get_missing_scan_404(api):
 
 
 @pytest.mark.asyncio
+async def test_scan_events_stream_closes_on_terminal_status(api):
+    client, _ = api
+    scan_id = (
+        await client.post("/api/scans", json={"source": "url", "url": "https://github.com/a/b"})
+    ).json()["scan_id"]
+    await store.complete_scan(scan_id, {
+        "findings": [], "analytics": {"total_findings": 0, "clean": True}, "duration_ms": 5,
+    })
+
+    lines = []
+    async with client.stream("GET", f"/api/scans/{scan_id}/events") as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        async for line in resp.aiter_lines():
+            if line:
+                lines.append(line)
+
+    assert len(lines) == 1
+    assert lines[0].startswith("data: ")
+    payload = json.loads(lines[0][len("data: "):])
+    assert payload["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_scan_events_404_for_missing_scan(api):
+    client, _ = api
+    resp = await client.get("/api/scans/999999/events")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_list_scans_most_recent_first(api):
     client, _ = api
     await client.post("/api/scans", json={"source": "url", "url": "https://github.com/a/b"})
@@ -161,10 +193,78 @@ async def test_list_scans_most_recent_first(api):
 
     resp = await client.get("/api/scans")
     assert resp.status_code == 200
-    scans = resp.json()["scans"]
+    body = resp.json()
+    scans = body["scans"]
     assert len(scans) == 2
     assert scans[0]["id"] > scans[1]["id"]
     assert "findings" not in scans[0]  # list view is summary-only
+    assert body["total"] == 2
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_scans_pagination(api):
+    client, _ = api
+    for i in range(5):
+        await client.post("/api/scans", json={"source": "url", "url": f"https://github.com/a/{i}"})
+
+    page1 = (await client.get("/api/scans", params={"limit": 2, "offset": 0})).json()
+    assert len(page1["scans"]) == 2
+    assert page1["total"] == 5
+    assert page1["has_more"] is True
+
+    page3 = (await client.get("/api/scans", params={"limit": 2, "offset": 4})).json()
+    assert len(page3["scans"]) == 1
+    assert page3["has_more"] is False
+
+    # limit is capped, not silently ignored
+    assert (await client.get("/api/scans", params={"limit": 500})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_scans_summary_range_rollup(api):
+    client, _ = api
+    resp = await client.get("/api/scans/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "scanned_in_range": 0,
+        "clean_pass_rate": 100,
+        "scans_with_incomplete_coverage": 0,
+        "certain_total": 0,
+        "findings_total": 0,
+        "by_rule": {},
+        "top_files": [],
+    }
+    assert (await client.get("/api/scans/summary", params={"range": "bogus"})).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_scans_summary_rolls_up_completed_scans(api):
+    client, _ = api
+    scan_id = (
+        await client.post("/api/scans", json={"source": "url", "url": "https://github.com/a/b"})
+    ).json()["scan_id"]
+    await store.complete_scan(scan_id, {
+        "findings": [],
+        "analytics": {
+            "total_findings": 3, "by_confidence": {"CERTAIN": 1, "HIGH": 2, "MEDIUM": 0},
+            "by_rule": {"SQG002": 1, "SQG004": 2}, "block_eligible": 1,
+            "top_files": [{"file_path": "a.py", "count": 2}],
+            "files_scanned": 5, "files_skipped": 0, "clean": False,
+        },
+        "duration_ms": 10,
+    })
+    # A second, still-queued scan must NOT count toward the rollup (only completed).
+    await client.post("/api/scans", json={"source": "url", "url": "https://github.com/c/d"})
+
+    body = (await client.get("/api/scans/summary")).json()
+    assert body["scanned_in_range"] == 1
+    assert body["clean_pass_rate"] == 0
+    assert body["certain_total"] == 1
+    assert body["findings_total"] == 3
+    assert body["by_rule"] == {"SQG002": 1, "SQG004": 2}
+    assert body["top_files"] == [{"file_path": "a.py", "count": 2}]
 
 
 # --- API-key auth on POST /api/scans (Sprint A) -----------------------------
@@ -195,6 +295,25 @@ async def test_post_scan_open_when_no_api_key_configured(api):
     resp = await client.post("/api/scans", json={"source": "url", "url": "https://github.com/x/y"})
     assert resp.status_code == 202
     assert len(enqueued) == 1
+
+
+@pytest.mark.asyncio
+async def test_reads_require_api_key_when_configured(api, monkeypatch):
+    """GET /api/scans and GET /api/scans/{id} must honor the same key as POST —
+    otherwise setting API_KEY only protects creation while findings/snippets stay
+    readable by anyone."""
+    client, enqueued = api
+    resp = await client.post("/api/scans", json={"source": "url", "url": "https://github.com/x/y"})
+    scan_id = resp.json()["scan_id"]
+
+    monkeypatch.setattr(settings, "api_key", "s3cr3t")
+
+    assert (await client.get("/api/scans")).status_code == 401
+    assert (await client.get(f"/api/scans/{scan_id}")).status_code == 401
+
+    headers = {"X-API-Key": "s3cr3t"}
+    assert (await client.get("/api/scans", headers=headers)).status_code == 200
+    assert (await client.get(f"/api/scans/{scan_id}", headers=headers)).status_code == 200
 
 
 # --- per-IP rate limiting (Sprint A) ----------------------------------------
@@ -243,7 +362,7 @@ async def test_rate_limit_fails_open_when_redis_down(api, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scan_start_returns_503_and_marks_failed_when_redis_down(api, monkeypatch):
-    """Mutation (2026-11-11): remove the fail_scan call in _safe_enqueue_scan ->
+    """Mutation (2026-11-11): remove the fail_scan call in _enqueue_or_fail ->
     the row stays 'queued' and this test fails. The 503 must not leave a phantom
     pending scan behind."""
     client, _ = api
@@ -257,7 +376,9 @@ async def test_scan_start_returns_503_and_marks_failed_when_redis_down(api, monk
         json={"source": "url", "url": "https://github.com/psf/requests"},
     )
     assert resp.status_code == 503
-    assert resp.json()["detail"] == "Scan queue unavailable (Redis not reachable)."
+    assert resp.json()["detail"] == (
+        "scan queue is unavailable; the scan was recorded as failed, please retry"
+    )
 
     scans = (await client.get("/api/scans")).json()["scans"]
     assert len(scans) == 1

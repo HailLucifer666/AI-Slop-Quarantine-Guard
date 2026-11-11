@@ -1,8 +1,9 @@
 "use client"
 
-import { checkName } from "@/lib/checks"
+import { RULE_IDS, checkName } from "@/lib/checks"
 
-const RULES = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006"]
+// Iterates the shared rule list, so a newly registered check charts itself.
+const RULES = RULE_IDS
 const RULE_COLOR: Record<string, string> = {
   SQG001: "bg-sev-certain",
   SQG002: "bg-sev-certain",
@@ -10,6 +11,8 @@ const RULE_COLOR: Record<string, string> = {
   SQG004: "bg-sev-high",
   SQG005: "bg-sev-high",
   SQG006: "bg-sev-high",
+  SQG007: "bg-sev-medium",
+  SQG009: "bg-sev-medium",
 }
 
 /**

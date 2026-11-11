@@ -32,6 +32,48 @@ async def test_shell_true_flagged():
 
 
 @pytest.mark.asyncio
+async def test_shell_true_with_nested_call_still_flagged():
+    findings = await check_sast(
+        _diff("run.py", ["subprocess.run(shlex.split(cmd), shell=True)"]), {}
+    )
+    assert len(findings) == 1
+    assert "shell=True" in findings[0].message
+
+
+@pytest.mark.asyncio
+async def test_custom_shell_kwarg_not_flagged():
+    # An unrelated kwarg that happens to end in "shell=True" is not a subprocess call.
+    findings = await check_sast(_diff("run.py", ["result = do_thing(custom_shell=True)"]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_multiline_safe_yaml_load_not_flagged():
+    findings = await check_sast(
+        _diff("y.py", ["data = yaml.load(", "    f, Loader=yaml.SafeLoader", ")"]), {}
+    )
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_destructured_child_process_exec_flagged():
+    findings = await check_sast(
+        _diff("run.js", ["const { exec } = require('child_process')", "exec(userCmd)"]), {}
+    )
+    assert len(findings) == 1
+    assert findings[0].line_start == 2
+    assert findings[0].confidence is Confidence.HIGH
+
+
+@pytest.mark.asyncio
+async def test_bare_exec_without_destructured_import_not_flagged():
+    # A bare exec() with no child_process destructuring anywhere in the file is not
+    # this sink (could be any other function named exec).
+    findings = await check_sast(_diff("run.js", ["exec(userCmd)"]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
 async def test_weak_hash_flagged_medium():
     findings = await check_sast(_diff("h.py", ["    d = hashlib.md5(data).hexdigest()"]), {})
     assert len(findings) == 1
@@ -144,3 +186,33 @@ async def test_sink_in_code_with_trailing_comment_still_flagged():
     findings = await check_sast(_diff("app.py", ["    eval(user_input)  # FIXME: sanitize first"]), {})
     assert len(findings) == 1
     assert "eval" in findings[0].message
+
+
+@pytest.mark.asyncio
+async def test_sink_inside_mid_line_block_comment_not_flagged():
+    # A sink named inside a self-contained /* ... */ block comment that sits in
+    # the MIDDLE of a line (real code before and after) is documentation, not a
+    # call site — the whole-line "starts with /*" guard alone doesn't catch this.
+    findings = await check_sast(_diff("run.js", [
+        "doSomething(); /* old approach: eval(userInput) — do not use */ doOther();"
+    ]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_sink_after_block_comment_on_same_line_still_flagged():
+    findings = await check_sast(_diff("run.js", [
+        "/* old note */ eval(userInput);"
+    ]), {})
+    assert len(findings) == 1
+    assert "eval" in findings[0].message
+
+
+@pytest.mark.asyncio
+async def test_unterminated_block_comment_opening_line_not_flagged():
+    # This line opens a multi-line /* ... */ that continues past it — still
+    # treated as comment (unterminated on this line), not a new false positive.
+    findings = await check_sast(_diff("run.js", [
+        "/* eval(userInput) is dangerous, this whole block is disabled:"
+    ]), {})
+    assert findings == []

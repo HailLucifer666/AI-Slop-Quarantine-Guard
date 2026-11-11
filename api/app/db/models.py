@@ -1,6 +1,23 @@
-"""SQLAlchemy 2.0 declarative models.
+"""SQLAlchemy 2.0 declarative models — eight tables, three of them unused.
 
-ponytail: stub columns, minimal schema.
+No longer the "stub columns, minimal schema" this docstring used to claim: ``Scan`` alone
+carries the progress, lease, coverage, grouping and ingest-provenance columns the scanner
+depends on.
+
+What a reader needs to know before trusting the shape of this file — verified against the
+live ``api/app.db``, which holds 19 scans:
+
+* ``Scan``, ``AppSettings``, ``AuditLog`` and ``WorkerHeartbeat`` are live.
+* ``Analysis`` and ``Finding`` are **empty (0 rows) and written by nothing.** A completed
+  scan's findings are stored as a JSON blob on the ``scans`` row, not normalised into
+  these tables. They describe an intended schema, not the one in use — do not read
+  ``findings`` expecting to see results. ``docs/DATA_MODEL.md`` carries the same warning.
+* ``Installation`` and ``WebhookDelivery`` are also empty, because no GitHub App
+  installation has ever been recorded against this database.
+
+New columns are added by the append-only ``_ADDED_COLUMNS`` tuple in ``session.py``, not
+by Alembic — ``alembic.ini`` exists but has no ``versions/``. That is a deliberate
+deviation for a single-node SQLite MVP and a debt to settle before Postgres.
 """
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
@@ -90,9 +107,46 @@ class Scan(Base):
     analytics_json = Column(Text, nullable=True)         # json.dumps(analytics)
     findings_json = Column(Text, nullable=True)          # json.dumps([finding, ...])
     skipped_json = Column(Text, nullable=True)           # json.dumps([skipped paths])
+    # Excluded by the SCANNED repo's own ignore rules. Kept apart from skipped_json:
+    # different cause, different wording, and the user is owed both facts.
+    suppressed_json = Column(Text, nullable=True)        # json.dumps([suppressed dirs])
+    # Per-rule coverage (app.coverage.summarize). Without this a stored scan cannot
+    # say which checks actually ran, so "0 findings" stays ambiguous forever.
+    coverage_json = Column(Text, nullable=True)
+    # Clustered view (app.grouping.summarize_groups). Redundant with findings_json by
+    # construction, and stored anyway so the dashboard renders the same clustering the
+    # PR comment does — a second implementation in TypeScript could disagree with this
+    # one, and then two surfaces would report different totals for the same scan.
+    groups_json = Column(Text, nullable=True)
+    # --- provenance: what exactly was analyzed, so a result is checkable ----------
+    resolved_sha = Column(String, nullable=True)         # git rev-parse HEAD, for url/local scans
+    content_hash = Column(String, nullable=True)         # sha256 over the ingested file set
+    file_count = Column(Integer, nullable=True)          # files handed to the analyzers
+    ingested_at = Column(DateTime, nullable=True)        # when the snapshot was taken
+    engine_versions_json = Column(Text, nullable=True)   # rule + engine versions used
     progress = Column(Text, nullable=True)               # json: live phase while status=running; cleared on finish
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
+    # Liveness lease while status=running. Stamped by the worker every
+    # HEARTBEAT_INTERVAL_S; a lapsed lease means the worker died mid-scan and the row
+    # is reconciled to failed (see store.reconcile_stale_scans). Without this, a dead
+    # worker leaves the scan "running" forever and the dashboard — which reads only
+    # completed scans — keeps rendering the PREVIOUS scan as the current answer.
+    heartbeat_at = Column(DateTime, nullable=True)
+
+
+class WorkerHeartbeat(Base):
+    """Global "is a worker alive at all" signal — a single row (id=1).
+
+    Distinct from Scan.heartbeat_at, which only exists while a specific scan runs. An
+    idle worker has no scan to stamp, so /api/health could not otherwise tell "idle"
+    apart from "process is gone" — the difference between a queue that will drain and
+    one that never will.
+    """
+    __tablename__ = "worker_heartbeat"
+
+    id = Column(Integer, primary_key=True)               # always 1
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AppSettings(Base):

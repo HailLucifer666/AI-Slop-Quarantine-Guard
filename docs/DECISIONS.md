@@ -10,13 +10,20 @@ Record of **why** each major choice was made. Future reference: "Why did we pick
 **Status:** ACCEPTED
 
 **Context:**  
-Analyzers (gitleaks, Trivy, Semgrep) are Python-native. Chose between FastAPI, Django, Flask.
+Chose between FastAPI, Django, Flask.
+
+> **Correction (superseded premise).** This ADR originally read "Analyzers (gitleaks, Trivy,
+> Semgrep) are Python-native." That was wrong on both counts: gitleaks, Trivy and Semgrep are
+> not Python libraries (the first two are Go binaries), and none of them is invoked by the
+> product. The analyzers that shipped are genuinely Python-native — hand-written pattern
+> matchers plus HTTP clients — so the conclusion below still holds, but not for the stated
+> reason. When those engines are wrapped they will be subprocesses, not imports.
 
 **Decision:**  
 Use **Python 3.12 + FastAPI** (async, ASGI).
 
 **Rationale:**
-- Analyzers are Python libraries; same language = less glue, easier testing.
+- The shipped analyzers are pure Python (regex + `httpx`); same language = less glue, easier testing.
 - FastAPI: async-native, built-in OpenAPI, minimal boilerplate, perfect for webhook-driven model.
 - Python 3.12: latest stable, security patches, faster than 3.11.
 - Async fits webhook model (accept quickly, process in background).
@@ -217,7 +224,7 @@ TruffleHog can call AWS/Stripe/GitHub to test if a leaked key is valid. But call
 
 **Rationale:**
 - Safe: no API calls with leaked credentials.
-- Still strong: gitleaks + format validation catches 95% of real cases.
+- Still strong: format validation on distinctive token shapes catches the common real cases. (The original claim of "gitleaks + format validation catches 95%" cited a tool that was never wired in, and the 95% figure was never measured. Detection is now measured instead — see `api/tests/test_accuracy.py`.)
 - Optional later: live verification (Phase 9+) with explicit user consent + audit.
 
 **Tradeoff:**  
@@ -455,9 +462,15 @@ How to ensure the Guard works reliably over time?
 **Status:** DEFERRED to Phase 11+  
 **Reason:** Single "score" can read as a guarantee; dangerous. Advisory-only, post-core.
 
-### Deferred-4: SQG007 (AI Scratchpad) Default Enabled
-**Status:** DEFERRED, OFF by default  
+### Deferred-4: SQG008 (AI Scratchpad) — never built
+**Status:** NOT IMPLEMENTED (renumbered from SQG007)  
 **Reason:** Broad regex fires on legit XML/HTML/markdown. Narrow to text files, enable on request only.
+
+**Renumbering note:** this check was specified as SQG007, but SQG007 shipped as the
+*typosquat* detector, so one supposedly stable id named two different checks. Resolved in
+favour of the code: SQG007 stays typosquat (findings under that id already exist in scan
+history and in `blocked_rules` settings; renumbering would orphan them), and the unbuilt
+scratchpad detector moves to SQG008.
 
 ---
 

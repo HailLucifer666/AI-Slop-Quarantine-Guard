@@ -1,4 +1,23 @@
-# DATA_MODEL — PostgreSQL Schema
+# DATA_MODEL — PostgreSQL Schema (TARGET, not current)
+
+> **Status: this document describes the intended schema, not the one running.**
+>
+> What actually ships today (`api/app/db/models.py`):
+>
+> - **SQLite**, not Postgres. `DATABASE_URL` defaults to a file under `api/`.
+> - **No Alembic.** `api/alembic.ini` is an unconfigured placeholder with no `versions/`
+>   directory. Additive columns are applied at startup from an explicit append-only list
+>   (`db/session.py::_ADDED_COLUMNS`), which is idempotent but is not a migration tool.
+> - **The `findings` and `analyses` tables below exist but are unused — 0 rows.** Whole-repo
+>   scan results live as JSON text on the `scans` row (`findings_json`, `analytics_json`,
+>   `coverage_json`, `groups_json`). Nothing writes per-finding rows.
+> - The real `scans` table also carries columns this document doesn't mention:
+>   `heartbeat_at` (worker liveness lease), `coverage_json`, `groups_json`, and the
+>   provenance set `resolved_sha` / `content_hash` / `file_count` / `ingested_at` /
+>   `engine_versions_json`.
+>
+> Normalizing findings into real rows, and adopting Alembic, are both still open. Until then
+> treat `api/app/db/models.py` as the source of truth and this file as the destination.
 
 All tables use PostgreSQL 14+, managed via Supabase. Migrations via Alembic.
 

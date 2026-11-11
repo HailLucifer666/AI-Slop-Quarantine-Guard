@@ -26,9 +26,21 @@ from .popular_packages import POPULAR_BY_ECOSYSTEM
 
 RULE_ID = "SQG007"
 
-# A short name has too many coincidental 2-edit neighbours to flag honestly.
-MIN_LEN = 5
+# A name below this floor is too short for edit distance to mean anything at all
+# (nearly everything is within 2 edits of a 1-2 char string).
+MIN_LEN = 3
 MAX_DISTANCE = 2
+# The allowed edit distance SCALES with the popular target's length rather than
+# using one flat floor — a flat MIN_LEN=5 floor let genuinely short squats
+# ("flsk" vs "flask") evade detection just by staying under it, while a flat
+# ratio alone would flood short real names with coincidental matches. A short
+# target (e.g. "six") only tolerates a 1-edit neighbour; a longer one tolerates
+# up to MAX_DISTANCE.
+MAX_DISTANCE_RATIO = 0.3
+
+
+def _max_allowed_distance(candidate_len: int) -> int:
+    return max(1, min(MAX_DISTANCE, round(candidate_len * MAX_DISTANCE_RATIO)))
 
 
 def _normalize(ecosystem: str, name: str) -> str:
@@ -71,7 +83,8 @@ def _closest_popular(ecosystem: str, name: str) -> Optional[str]:
     best: Optional[str] = None
     best_d = MAX_DISTANCE + 1
     for candidate in popular:
-        d = _edit_distance_within(name, candidate, MAX_DISTANCE)
+        allowed = _max_allowed_distance(len(candidate))
+        d = _edit_distance_within(name, candidate, allowed)
         if d is not None and 1 <= d < best_d:
             best, best_d = candidate, d
             if best_d == 1:

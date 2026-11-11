@@ -49,6 +49,37 @@ async def test_pip_pinned_vuln_flagged():
 
 
 @pytest.mark.asyncio
+async def test_hash_pinned_vuln_still_flagged():
+    # pip's own hash-pinning convention (--hash=...) used to make the fully-anchored
+    # regex miss the pin entirely — exactly the security-conscious style that most
+    # needs OSV coverage.
+    line = "requests==2.19.0 --hash=sha256:abc123def456"
+    diff = _diff("requirements.txt", [line])
+    ctx, kw = _ctx({"requirements.txt": line + "\n"}, vulns=[{"id": "GHSA-xxxx"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    assert "GHSA-xxxx" in findings[0].message
+
+
+@pytest.mark.asyncio
+async def test_marker_suffixed_vuln_still_flagged():
+    line = 'requests==2.19.0; python_version>="3.8"'
+    diff = _diff("requirements.txt", [line])
+    ctx, kw = _ctx({"requirements.txt": line + "\n"}, vulns=[{"id": "GHSA-xxxx"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_wildcard_version_still_not_treated_as_exact_pin():
+    # "1.2.*" is a range, not an exact pin — must not be misread as pinned to "1.2".
+    diff = _diff("requirements.txt", ["requests==1.2.*"])
+    ctx, kw = _ctx({"requirements.txt": "requests==1.2.*\n"}, vulns=[{"id": "GHSA-xxxx"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert findings == []
+
+
+@pytest.mark.asyncio
 async def test_npm_exact_vuln_flagged():
     diff = _diff("package.json", ['    "lodash": "4.17.4",'])
     content = '{"dependencies": {"lodash": "4.17.4"}}'
@@ -215,3 +246,108 @@ async def test_one_batched_call_for_many_distinct_pins():
     )
     assert len(calls) == 1                # one batch invocation, not 50
     assert len(calls[0]) == 50            # all distinct pins in it
+
+
+# --- new ecosystems: Go / Maven / RubyGems / Packagist / NuGet ---------------
+# Before app.pinned existed, every one of these repos got zero SQG004 findings —
+# not because they were clean, but because no parser read their manifests. Each
+# test asserts the pin reaches OSV under that ecosystem's own naming convention,
+# since a near-miss name returns a confident, wrong "no known vulnerabilities".
+
+@pytest.mark.asyncio
+async def test_go_mod_pin_reaches_osv_without_the_v_prefix():
+    from tests.test_pinned import GO_MOD
+
+    seen: list = []
+    diff = _diff("go.mod", GO_MOD.splitlines())
+    ctx, kw = _ctx({"go.mod": GO_MOD}, vulns=[{"id": "GO-2023-1234"}], seen=seen)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert ("go", "golang.org/x/crypto", "0.14.0") in seen
+    assert any(f.file_path == "go.mod" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_pom_pin_reaches_osv_as_group_colon_artifact():
+    from tests.test_pinned import POM
+
+    seen: list = []
+    diff = _diff("pom.xml", POM.splitlines())
+    ctx, kw = _ctx({"pom.xml": POM}, vulns=[{"id": "GHSA-jfh8-c2jp-5v3q"}], seen=seen)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert ("maven", "org.apache.logging.log4j:log4j-core", "2.14.1") in seen
+    assert findings and all(f.rule_id == "SQG004" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_pom_finding_anchors_to_a_line_the_file_actually_has():
+    """A POM spreads groupId, artifactId and version over three lines, so the
+    locator must still land inside the diff rather than returning line 0."""
+    from tests.test_pinned import POM
+
+    lines = POM.splitlines()
+    diff = _diff("pom.xml", lines)
+    ctx, kw = _ctx({"pom.xml": POM}, vulns=[{"id": "GHSA-x"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert findings
+    for f in findings:
+        assert 1 <= f.line_start <= len(lines)
+
+
+@pytest.mark.asyncio
+async def test_gemfile_lock_pin_reaches_osv():
+    from tests.test_pinned import GEMFILE_LOCK
+
+    seen: list = []
+    diff = _diff("Gemfile.lock", GEMFILE_LOCK.splitlines())
+    ctx, kw = _ctx({"Gemfile.lock": GEMFILE_LOCK}, vulns=[{"id": "GHSA-y"}], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    assert ("rubygems", "actionpack", "7.0.4") in seen
+
+
+@pytest.mark.asyncio
+async def test_composer_lock_pin_reaches_osv():
+    from tests.test_pinned import COMPOSER_LOCK
+
+    seen: list = []
+    diff = _diff("composer.lock", COMPOSER_LOCK.splitlines())
+    ctx, kw = _ctx({"composer.lock": COMPOSER_LOCK}, vulns=[{"id": "GHSA-z"}], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    assert ("packagist", "monolog/monolog", "1.25.3") in seen
+
+
+@pytest.mark.asyncio
+async def test_csproj_pin_reaches_osv():
+    from tests.test_pinned import CSPROJ
+
+    seen: list = []
+    diff = _diff("src/Api/Api.csproj", CSPROJ.splitlines())
+    ctx, kw = _ctx({"src/Api/Api.csproj": CSPROJ}, vulns=[{"id": "GHSA-w"}], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    assert ("nuget", "Newtonsoft.Json", "12.0.1") in seen
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_versions_are_never_queried():
+    """The whole point of the unresolved count: a Gradle variable, an inherited
+    Maven property and a NuGet range must not be sent to OSV as if they were
+    versions. A wrong version yields a wrong answer stated as fact."""
+    from tests.test_pinned import CSPROJ, GRADLE
+
+    seen: list = []
+    files = {"build.gradle": GRADLE, "Api.csproj": CSPROJ}
+    diff = _diff("build.gradle", GRADLE.splitlines()) + _diff("Api.csproj", CSPROJ.splitlines())
+    ctx, kw = _ctx(files, vulns=[], seen=seen)
+    await check_vulnerabilities(diff, ctx, **kw)
+    queried = {name: version for _eco, name, version in seen}
+    assert "org.example:configurable" not in queried
+    assert "Ranged" not in queried and "Variable" not in queried
+    assert all("$" not in v and "*" not in v and "[" not in v for v in queried.values())
+
+
+@pytest.mark.asyncio
+async def test_osv_outage_on_a_new_ecosystem_still_fails_safe():
+    from tests.test_pinned import POM
+
+    diff = _diff("pom.xml", POM.splitlines())
+    ctx, kw = _ctx({"pom.xml": POM}, osv_down=True)
+    assert await check_vulnerabilities(diff, ctx, **kw) == []

@@ -4,6 +4,7 @@ Handles GitHub webhook ingestion: POST /webhooks/github (HMAC verify → dedupe 
 Health check: GET /healthz
 """
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -15,21 +16,57 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.db.session import init_db
-from app.queue import already_seen, enqueue_webhook_delivery, ping_redis
+from app.health_router import router as health_router
+from app.queue import already_seen, enqueue_webhook_delivery, ping_redis, release_delivery
 from app.scans_router import router as scans_router
 from app.crew_router import router as crew_router
 from app.audit_router import router as audit_router
 from app.settings_router import router as settings_router
 from app.security import verify_github_signature
+from app.store import reconcile_stale_scans
+
+# uvicorn configures only its own loggers, so without this the root level stays at
+# WARNING and every logger.info in the app is discarded — including which database
+# resolved, the one line that makes an API/worker split diagnosable. Matches the
+# format worker.main() already uses so both processes' logs read the same.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 logger = logging.getLogger(__name__)
+
+# How often the API re-checks for scans whose worker died. The worker runs the same
+# reconciler at startup, but only the API can unwedge the dashboard when the worker
+# never comes back at all — which is the case that actually stranded users.
+RECONCILE_POLL_SECONDS = 60
+
+
+async def _reconcile_loop() -> None:
+    """Fail scans with a lapsed worker lease, forever, without ever raising."""
+    while True:
+        await asyncio.sleep(RECONCILE_POLL_SECONDS)
+        try:
+            await reconcile_stale_scans()
+        except Exception:  # noqa: BLE001 — a bad pass must not end the loop
+            logger.exception("stale-scan reconciliation pass failed")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Create tables on startup so the scan API + worker have somewhere to write."""
     await init_db()
-    yield
+    # Clear anything already stranded by a past worker crash before serving traffic,
+    # so the dashboard doesn't open on a stuck "running" scan.
+    try:
+        await reconcile_stale_scans()
+    except Exception:  # noqa: BLE001 — never block startup on a reconciliation pass
+        logger.exception("startup stale-scan reconciliation failed")
+    reconciler = asyncio.create_task(_reconcile_loop())
+    try:
+        yield
+    finally:
+        reconciler.cancel()
 
 
 app = FastAPI(title="AI Slop Quarantine Guard", lifespan=lifespan)
@@ -47,6 +84,7 @@ app.include_router(scans_router)
 app.include_router(crew_router)
 app.include_router(audit_router)
 app.include_router(settings_router)
+app.include_router(health_router)
 
 
 @app.get("/healthz")
@@ -80,21 +118,31 @@ async def github_webhook(request: Request):
     if not delivery_guid:
         raise HTTPException(status_code=400, detail="missing X-GitHub-Delivery header")
 
-    # 2/3. Idempotency + enqueue — both need Redis. When Redis is down we 503 so
-    # GitHub retries the delivery later; the worker is already backing off and will
-    # drain the queue once Redis returns (never fail the request with a 500 traceback).
+    # 2. Parse before claiming the GUID — a body we cannot read was never a delivery
+    #    we handled, and must not consume the dedupe key.
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="malformed JSON body")
+
+    # 3/4. Idempotency + enqueue. Two failure classes, two honest answers:
+    #   - Redis is down → 503, GitHub retries later, the worker backs off and
+    #     drains the queue once Redis returns (never a 500 traceback).
+    #   - any other enqueue failure → release the dedupe claim so the delivery is
+    #     retried instead of silently swallowed (the job exists nowhere).
     try:
         if await already_seen(delivery_guid):
             logger.info("duplicate delivery ignored: %s", delivery_guid)
             return JSONResponse({"status": "duplicate"}, status_code=200)
-
-        payload = json.loads(raw_body)
         await enqueue_webhook_delivery(delivery_guid, event, payload)
     except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError):
         raise HTTPException(
             status_code=503,
             detail="Webhook processing unavailable (Redis not reachable).",
         )
+    except Exception:
+        await release_delivery(delivery_guid)
+        raise
     logger.info("enqueued delivery=%s event=%s", delivery_guid, event)
 
     return JSONResponse({"status": "accepted"}, status_code=202)

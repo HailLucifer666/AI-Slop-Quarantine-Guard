@@ -1,7 +1,7 @@
 "use client"
 
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis } from "recharts"
-import { checkName } from "@/lib/checks"
+import { RULE_IDS, checkName } from "@/lib/checks"
 
 const RULE_COLOR: Record<string, string> = {
   SQG001: "#FF3B5C", // fake pkg (block-eligible)
@@ -10,8 +10,10 @@ const RULE_COLOR: Record<string, string> = {
   SQG004: "#FF8A3D", // CVE
   SQG005: "#FF8A3D", // license
   SQG006: "#FF8A3D", // SAST
+  SQG007: "#FFC83D", // typosquat (advisory)
+  SQG009: "#FFC83D", // avoidable complexity (advisory)
 }
-const RULES = ["SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006"]
+const RULES = RULE_IDS
 
 export function SeverityBars({ byRule }: { byRule: Record<string, number> }) {
   const data = RULES.map((id) => ({ id, name: id, value: byRule[id] ?? 0 }))

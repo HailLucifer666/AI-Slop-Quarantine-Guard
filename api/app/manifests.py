@@ -9,9 +9,27 @@ them would be a false positive.
 import json
 import re
 import tomllib
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
+
+from app.pinned import (
+    ManifestPins,
+    parse_build_gradle,
+    parse_composer_lock,
+    parse_csproj,
+    parse_gemfile_lock,
+    parse_go_mod,
+    parse_packages_lock_json,
+    parse_pom_xml,
+)
 
 # Map a manifest basename to the ecosystem whose registry should answer for it.
+#
+# This map drives SQG001 (existence) and SQG005 (license), both of which query a public
+# registry by name. A basename only belongs here once `registries._registry_url` and
+# `licenses._SUPPORTED` can actually answer for that ecosystem — otherwise SQG001 reports
+# every dependency as "registry unreachable", which is a false statement about why we
+# don't know. Ecosystems we can read *versions* from but not yet query by name live in
+# VERSIONED_MANIFEST_ECOSYSTEM below.
 MANIFEST_ECOSYSTEM: Dict[str, str] = {
     "requirements.txt": "pypi",
     "pyproject.toml": "pypi",
@@ -37,6 +55,8 @@ def manifest_ecosystem(filename: str) -> str | None:
 
 def _is_non_registry(spec: str) -> bool:
     spec = spec.strip().strip('"').strip("'")
+    if " @ " in spec:  # PEP 508 direct reference, e.g. "name @ https://..." — never a registry lookup
+        return True
     return any(spec.startswith(p) for p in _NON_REGISTRY_PREFIXES)
 
 
@@ -111,6 +131,34 @@ def parse_cargo_toml(content: str) -> Dict[str, str]:
     return deps
 
 
+# pip directive that declares a non-public package index. Lives as its own line
+# in requirements.txt (`--extra-index-url https://...` / `--index-url https://...`
+# / their `-i`/`-e` short forms — note `-e` here is pip's *editable install* flag,
+# unrelated to `--extra-index-url`'s short form `-i`). A hit means SOME dependency
+# in this specific file may resolve from a private index the public registry has
+# never heard of — existence-checking against the public registry alone would
+# false-block a real package, so callers downgrade MISSING to advisory for this
+# file rather than treating it as a proven fact.
+_PIP_INDEX_DIRECTIVE = re.compile(r"^\s*(?:--extra-index-url|--index-url|-i)\b", re.IGNORECASE)
+
+
+def has_pip_extra_index(content: str) -> bool:
+    """True if a requirements.txt declares a custom package index."""
+    return any(_PIP_INDEX_DIRECTIVE.match(line) for line in content.splitlines())
+
+
+# .npmrc scope→registry override, e.g. "@myorg:registry=https://npm.myorg.com".
+# Declaring this tells npm that names under "@myorg/*" resolve from that registry,
+# not the public one — the same false-block risk as the pip case above, but
+# precisely scoped to the declared scope(s) rather than the whole ecosystem.
+_NPMRC_SCOPE_RE = re.compile(r"^\s*(@[a-z0-9][a-z0-9._-]*):registry\s*=", re.IGNORECASE | re.MULTILINE)
+
+
+def npmrc_private_scopes(content: str) -> set[str]:
+    """Scopes (e.g. {"@myorg"}) an .npmrc redirects to a non-public registry."""
+    return {m.group(1) for m in _NPMRC_SCOPE_RE.finditer(content)}
+
+
 def extract_dependency_names(filename: str, content: str) -> List[str]:
     """Dispatch to the right parser by filename; return registry-checkable names."""
     base = filename.rsplit("/", 1)[-1]
@@ -143,6 +191,9 @@ LOCKFILE_ECOSYSTEM: Dict[str, str] = {
     "poetry.lock": "pypi",
     "Cargo.lock": "crates",
     "go.sum": "go",
+    "Gemfile.lock": "rubygems",
+    "composer.lock": "packagist",
+    "packages.lock.json": "nuget",
 }
 
 # yarn.lock resolved version line — classic v1 (`version "1.2.3"`) and berry
@@ -263,6 +314,80 @@ def extract_pinned_lockfile(filename: str, content: str) -> List[Tuple[str, str]
             return parse_yarn_lock(content)
         if base == "go.sum":
             return parse_go_sum(content)
+        if base in _EXTRA_LOCKFILE_PARSERS:
+            return _EXTRA_LOCKFILE_PARSERS[base](content).pins
     except (tomllib.TOMLDecodeError, json.JSONDecodeError, ValueError, AttributeError):
         return []
     return []
+
+
+# --- Ecosystems we can version but not yet name-check ------------------------------
+# Go, Maven, RubyGems, Packagist and NuGet manifests pin exact versions, which is all
+# SQG004 needs to ask OSV whether a version is known-vulnerable. They are deliberately
+# NOT in MANIFEST_ECOSYSTEM: SQG001 would then query a registry client that has no URL
+# for them and report "registry unreachable" — describing a support gap as an outage.
+# Parsers live in app/pinned.py; this section is only the routing table.
+
+VERSIONED_MANIFEST_ECOSYSTEM: Dict[str, str] = {
+    "go.mod": "go",
+    "pom.xml": "maven",
+    "build.gradle": "maven",
+    "build.gradle.kts": "maven",
+}
+
+# .NET project files are named after the project, so they match on extension.
+VERSIONED_MANIFEST_SUFFIXES: Dict[str, str] = {
+    ".csproj": "nuget",
+    ".fsproj": "nuget",
+    ".vbproj": "nuget",
+}
+
+_VERSIONED_PARSERS: Dict[str, Callable[[str], ManifestPins]] = {
+    "go.mod": parse_go_mod,
+    "pom.xml": parse_pom_xml,
+    "build.gradle": parse_build_gradle,
+    "build.gradle.kts": parse_build_gradle,
+}
+
+_EXTRA_LOCKFILE_PARSERS: Dict[str, Callable[[str], ManifestPins]] = {
+    "Gemfile.lock": parse_gemfile_lock,
+    "composer.lock": parse_composer_lock,
+    "packages.lock.json": parse_packages_lock_json,
+}
+
+
+def versioned_manifest_ecosystem(filename: str) -> str | None:
+    """Ecosystem for a manifest we can read exact versions from, else None.
+
+    Covers only the ecosystems absent from MANIFEST_ECOSYSTEM — callers that want "any
+    file with pins" check this, `manifest_ecosystem` and `lockfile_ecosystem` in turn.
+    """
+    base = filename.rsplit("/", 1)[-1]
+    if base in VERSIONED_MANIFEST_ECOSYSTEM:
+        return VERSIONED_MANIFEST_ECOSYSTEM[base]
+    dot = base.rfind(".")
+    if dot > 0:
+        return VERSIONED_MANIFEST_SUFFIXES.get(base[dot:].lower())
+    return None
+
+
+def parse_pins(filename: str, content: str) -> ManifestPins:
+    """Pins plus unresolved count for any file in the newly supported ecosystems.
+
+    Returns an empty result for anything else, including the pypi/npm/crates files whose
+    pins are read elsewhere — this is the extension point, not a replacement for them.
+    A parse failure yields no pins and no unresolved count: an unparseable file is a
+    silence we report through coverage, never a guess.
+    """
+    base = filename.rsplit("/", 1)[-1]
+    parser = _VERSIONED_PARSERS.get(base) or _EXTRA_LOCKFILE_PARSERS.get(base)
+    if parser is None:
+        dot = base.rfind(".")
+        if dot > 0 and base[dot:].lower() in VERSIONED_MANIFEST_SUFFIXES:
+            parser = parse_csproj
+    if parser is None:
+        return ManifestPins()
+    try:
+        return parser(content)
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        return ManifestPins()

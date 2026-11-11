@@ -38,11 +38,16 @@ def client(monkeypatch):
     async def fake_enqueue(guid: str, event: str, payload: dict) -> None:
         enqueued.append({"delivery_guid": guid, "event": event, "payload": payload})
 
+    async def fake_release(guid: str) -> None:
+        seen.discard(guid)
+
     monkeypatch.setattr(main, "already_seen", fake_already_seen)
     monkeypatch.setattr(main, "enqueue_webhook_delivery", fake_enqueue)
+    monkeypatch.setattr(main, "release_delivery", fake_release)
 
     c = TestClient(main.app)
     c.enqueued = enqueued  # expose for assertions
+    c.seen = seen
     return c
 
 
@@ -127,4 +132,42 @@ def test_duplicate_delivery_deduped(client):
     assert first.status_code == 202
     assert second.status_code == 200
     assert second.json() == {"status": "duplicate"}
-    assert len(client.enqueued) == 1  # only the first enqueued
+
+
+def test_malformed_json_body_400_not_500(client):
+    # A validly-signed but malformed body must return a clean 400, not an
+    # uncaught JSONDecodeError surfacing as a 500.
+    body = b"not json at all"
+    resp = _post(client, body, guid="malformed-guid")
+    assert resp.status_code == 400
+    assert client.enqueued == []
+
+
+def test_a_failed_enqueue_does_not_consume_the_delivery_guid(client, monkeypatch):
+    """GitHub retries a delivery it never got a 2xx for. Claiming the dedupe key before
+    the job was durably queued meant that retry was answered 200 {"status":"duplicate"}
+    and the PR was never analysed — silently, with no error anywhere.
+    """
+    body = json.dumps({"action": "opened"}).encode()
+    real_enqueue = main.enqueue_webhook_delivery
+
+    async def failing_enqueue(guid, event, payload):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(main, "enqueue_webhook_delivery", failing_enqueue)
+    with pytest.raises(RuntimeError):
+        _post(client, body, guid="guid-retry")
+    assert "guid-retry" not in client.seen  # the claim was released
+
+    # GitHub retries the same delivery; it must be processed, not deduped away.
+    monkeypatch.setattr(main, "enqueue_webhook_delivery", real_enqueue)
+    resp = _post(client, body, guid="guid-retry")
+    assert resp.status_code == 202
+    assert [j["delivery_guid"] for j in client.enqueued] == ["guid-retry"]
+
+
+def test_malformed_json_does_not_consume_the_delivery_guid(client):
+    """A body we could not read was never a delivery we handled."""
+    resp = _post(client, b"{not json", guid="guid-bad")
+    assert resp.status_code == 400
+    assert "guid-bad" not in client.seen

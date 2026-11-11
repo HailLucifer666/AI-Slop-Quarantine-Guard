@@ -148,3 +148,19 @@ async def test_route_success_200(monkeypatch):
         resp = await c.post("/api/crew/explain", json=FINDING)
     assert resp.status_code == 200
     assert resp.json()["explanation"] == "e"
+
+
+@pytest.mark.asyncio
+async def test_route_requires_api_key_when_configured(monkeypatch):
+    # Unauthenticated + unrated, this endpoint lets anyone burn the operator's LLM
+    # budget on demand — must be gated exactly like scan creation.
+    async def fake_ok(_f):
+        return {"explanation": "e", "why_it_matters": "w", "how_to_fix": "h"}
+
+    monkeypatch.setattr(crew_router, "explain_finding", fake_ok)
+    monkeypatch.setattr(settings, "api_key", "s3cr3t")
+    transport = ASGITransport(app=main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        assert (await c.post("/api/crew/explain", json=FINDING)).status_code == 401
+        resp = await c.post("/api/crew/explain", json=FINDING, headers={"X-API-Key": "s3cr3t"})
+        assert resp.status_code == 200

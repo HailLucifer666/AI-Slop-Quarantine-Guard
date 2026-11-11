@@ -69,6 +69,7 @@ Once the Guard reports its findings, Claude Haiku reads them and explains each o
 - **Want to see all API endpoints?** → `API_SPEC.md`
 - **Want to know how we keep secrets safe?** → `SECURITY.md`
 - **Want the step-by-step setup guide?** → `BUILD_GUIDE.md`
+- **Already set up, and something is fighting you?** → `LOCAL_DEV.md`
 - **Want to deploy to production?** → `DEPLOYMENT.md`
 - **Want to see the build plan?** → `ROADMAP.md`
 - **Want to understand the big decisions?** → `DECISIONS.md`

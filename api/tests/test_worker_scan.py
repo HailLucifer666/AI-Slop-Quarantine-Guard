@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app import store, worker
 from app.db.models import Base
-from app.ingest import IngestError
+from app.ingest import IngestError, IngestResult
 
 
 @pytest_asyncio.fixture
@@ -30,7 +30,7 @@ async def scan_store(tmp_path, monkeypatch):
 async def test_scan_job_completes_and_persists_findings(scan_store, monkeypatch):
     scan_id = await store.create_scan("local", "/proj")
     files = {"config.py": 'KEY = "AKIAIOSFODNN7REALKEY"\n# TODO: implement\nx = 1\n'}
-    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: (files, []))
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: IngestResult(files=files, skipped=[], resolved_sha="a" * 40))
 
     await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/proj"})
 
@@ -50,7 +50,7 @@ async def test_scan_job_records_shadow_block_without_blocking(scan_store, monkey
     records that in analytics + a scan.shadow_block audit row, but still completes."""
     scan_id = await store.create_scan("local", "/proj")
     files = {"config.py": 'KEY = "AKIAIOSFODNN7REALKEY"\nx = 1\n'}
-    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: (files, []))
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: IngestResult(files=files, skipped=[], resolved_sha="a" * 40))
 
     await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/proj"})
 
@@ -63,23 +63,62 @@ async def test_scan_job_records_shadow_block_without_blocking(scan_store, monkey
 
 
 @pytest.mark.asyncio
-async def test_scan_job_clean_repo_completes_clean(scan_store, monkeypatch):
+async def test_scan_job_no_findings_records_coverage_not_a_clean_claim(scan_store, monkeypatch):
+    """A readme-only repo gives most checks nothing to read, so it isn't "clean"."""
     scan_id = await store.create_scan("local", "/clean")
-    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: ({"README.md": "# hi\n"}, []))
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: IngestResult(files={"README.md": "# hi\n"}, skipped=[], resolved_sha=None))
 
     await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/clean"})
 
     row = await store.get_scan(scan_id)
     assert row["status"] == "completed"
     assert row["findings"] == []
-    assert row["analytics"]["clean"] is True
+    assert row["analytics"]["clean"] is False
+    assert row["coverage"]["rules_incomplete"] > 0
+
+
+@pytest.mark.asyncio
+async def test_scan_job_records_ingest_provenance(scan_store, monkeypatch):
+    """What was analyzed is recorded, so a result can be traced to a snapshot."""
+    scan_id = await store.create_scan("url", "https://github.com/a/b")
+    files = {"a.py": "x = 1\n"}
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: IngestResult(files=files, skipped=[], resolved_sha="deadbeef" * 5))
+
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "url", "ref": "https://github.com/a/b"})
+
+    row = await store.get_scan(scan_id)
+    assert row["resolved_sha"] == "deadbeef" * 5
+    assert row["file_count"] == 1
+    assert row["ingested_at"] is not None
+    assert row["engine_versions"]["rules_version"] == store.SQG_RULES_VERSION
+    # Same content always hashes the same, which is what makes freshness checkable.
+    from app.ingest import content_hash
+    assert row["content_hash"] == content_hash(files)
+
+
+@pytest.mark.asyncio
+async def test_provenance_survives_a_failure_during_analysis(scan_store, monkeypatch):
+    """A scan that dies mid-analysis still proves which snapshot it was looking at."""
+    scan_id = await store.create_scan("local", "/proj")
+    monkeypatch.setattr(worker, "ingest_codebase", lambda s, r: IngestResult(files={"a.py": "x=1\n"}, skipped=[], resolved_sha="c" * 40))
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("analyzer stage exploded")
+
+    monkeypatch.setattr(worker, "run_scan", boom)
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/proj"})
+
+    row = await store.get_scan(scan_id)
+    assert row["status"] == "failed"
+    assert row["resolved_sha"] == "c" * 40  # recorded before analysis began
+    assert row["file_count"] == 1
 
 
 @pytest.mark.asyncio
 async def test_scan_job_surfaces_skipped(scan_store, monkeypatch):
     scan_id = await store.create_scan("local", "/big")
     monkeypatch.setattr(
-        worker, "ingest_codebase", lambda s, r: ({"a.py": "x=1\n"}, ["huge.bin (too large)"])
+        worker, "ingest_codebase", lambda s, r: IngestResult(files={"a.py": "x=1\n"}, skipped=["huge.bin (too large)"], resolved_sha=None)
     )
 
     await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/big"})

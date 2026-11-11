@@ -57,11 +57,77 @@ async def test_aws_key_blocks():
 
 
 @pytest.mark.asyncio
+async def test_real_key_not_suppressed_by_unrelated_allowlist_word_on_same_line():
+    # A real, distinctively-shaped key sharing a line with an UNRELATED allowlist
+    # token (e.g. a trailing comment mentioning os.environ) must still be caught —
+    # the allowlist is scoped to a window around the match, not the whole line.
+    diff = _diff("app.py", ['API_KEY = "AKIAABCDEFGHIJKLMNOP"  # fallback if os.environ lookup fails'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.CERTAIN
+    assert findings[0].block_eligible is True
+
+
+@pytest.mark.asyncio
+async def test_real_key_not_downgraded_by_unrelated_ellipsis_on_same_line():
+    # A distant "..." (e.g. in a trailing comment) must not downgrade a real,
+    # complete key elsewhere on the line to a placeholder.
+    diff = _diff("app.py", ['API_KEY = "AKIAABCDEFGHIJKLMNOP"  # rotate this later...'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.CERTAIN
+    assert findings[0].block_eligible is True
+
+
+@pytest.mark.asyncio
 async def test_github_token_blocks():
     tok = "ghp_" + "a" * 36
     findings = await check_secrets(_diff("x.py", [f'token = "{tok}"']), {})
     assert len(findings) == 1
     assert findings[0].confidence is Confidence.CERTAIN
+
+
+@pytest.mark.asyncio
+async def test_github_fine_grained_pat_blocks():
+    tok = "github_pat_11ABCDEF0123456789abcdefghij"
+    findings = await check_secrets(_diff("x.py", [f'token = "{tok}"']), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.CERTAIN
+    assert findings[0].block_eligible is True
+
+
+@pytest.mark.asyncio
+async def test_unquoted_dotenv_secret_flagged():
+    # .env files use bare KEY=value (no quotes) — must not be invisible to the scanner.
+    findings = await check_secrets(_diff(".env", ["DATABASE_PASSWORD=SuperSecretPass123"]), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert "DATABASE_PASSWORD" in findings[0].message
+
+
+@pytest.mark.asyncio
+async def test_unquoted_assignment_outside_dotenv_not_flagged():
+    # The unquoted pattern is scoped to .env* paths — ordinary source code with an
+    # unquoted assignment (e.g. a variable reference) must not be flagged.
+    findings = await check_secrets(_diff("app/config.py", ["password = get_password()"]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_unquoted_dotenv_local_secret_still_silent():
+    # .env.local is gitignored/local — the generic tier intentionally stays silent
+    # there entirely (pre-existing behavior); the unquoted fix must not change that.
+    findings = await check_secrets(_diff(".env.local", ["DATABASE_PASSWORD=SuperSecretPass123"]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_unquoted_dotenv_production_variant_flagged():
+    # A committed, non-local .env variant (.env.production) is a real leak surface —
+    # the unquoted pattern must apply to it too, not just bare ".env".
+    findings = await check_secrets(_diff(".env.production", ["DATABASE_PASSWORD=SuperSecretPass123"]), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
 
 
 @pytest.mark.asyncio

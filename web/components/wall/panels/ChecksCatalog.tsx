@@ -2,7 +2,8 @@
 
 import { CHECKS } from "@/lib/checks"
 
-/** Checks catalog overlay — the 6 SQG checks, plain-English, severity glyph. */
+/** Checks catalog overlay — every registered SQG check, plain-English, severity glyph.
+ *  The list comes from CHECKS, so it cannot fall behind the analyzers that actually run. */
 const SEV: Record<string, string> = {
   SQG001: "var(--wall-sev-certain)",
   SQG002: "var(--wall-sev-certain)",
@@ -10,6 +11,8 @@ const SEV: Record<string, string> = {
   SQG004: "var(--wall-sev-high)",
   SQG005: "var(--wall-sev-high)",
   SQG006: "var(--wall-sev-high)",
+  SQG007: "var(--wall-sev-medium)",
+  SQG009: "var(--wall-sev-medium)",
 }
 // Checks that produce block-eligible (provable) findings vs advisory-only.
 const BLOCKABLE = new Set(["SQG001", "SQG002"])
