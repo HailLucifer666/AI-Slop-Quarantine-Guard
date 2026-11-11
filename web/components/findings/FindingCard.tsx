@@ -14,6 +14,11 @@ export function FindingCard({ finding }: { finding: Finding }) {
   const [loadingExp, setLoadingExp] = useState(false)
   const [expError, setExpError] = useState<string | null>(null)
   const ev = finding.evidence
+  // Findings stored before cwe/advisories shipped have neither key (historical rows
+  // are rendered as-is). Absent means "no references were stated" — render nothing,
+  // never crash on history.
+  const cwe = finding.cwe ?? []
+  const advisories = finding.advisories ?? []
 
   async function explain() {
     if (exp || loadingExp) return
@@ -78,10 +83,10 @@ export function FindingCard({ finding }: { finding: Finding }) {
 
       {/* References — CWE and published advisories as real links, so every claim the
           finding makes is checkable against a source rather than taken on trust. */}
-      {(finding.cwe.length > 0 || finding.advisories.length > 0) && (
+      {(cwe.length > 0 || advisories.length > 0) && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-text-faint">References:</span>
-          {finding.cwe.map((id) => (
+          {cwe.map((id) => (
             <a
               key={id}
               href={`https://cwe.mitre.org/data/definitions/${id.split("-").pop()}.html`}
@@ -92,7 +97,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
               {id}
             </a>
           ))}
-          {finding.advisories.map((a) => (
+          {advisories.map((a) => (
             <a
               key={a.id}
               href={a.url}
