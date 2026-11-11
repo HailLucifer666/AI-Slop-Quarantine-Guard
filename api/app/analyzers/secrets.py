@@ -140,12 +140,11 @@ _SLUG_VALUE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _CONST_VALUE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # A quoted value that reads as an English phrase — letters, spaces, apostrophes,
-# hyphens, optional sentence punctuation, never a digit or symbol — is a UI label
-# or a human sentence, not a credential (a dashboard's `secrets: "Leaked secrets"`
-# label). Quoted tier only. Real credential values are space-free; passphrases are
-# the exception, and are recognized by NAME so they keep surfacing.
+# hyphens, optional sentence punctuation, never a digit or symbol. Quoted tier only.
 _PROSE_VALUE = re.compile(r"^[A-Za-z][A-Za-z' \-]*[.!?]?$")
-_PASSPHRASE_NAME = re.compile(r"pass(?:word|wd|phrase)|pwd", re.IGNORECASE)
+# The credential-word family _ASSIGNMENT's name group matches. A UI label echoes its
+# own category name ("secrets: \"Leaked secrets\""); a real value does not.
+_CRED_WORD = re.compile(r"secret|token|pass(?:word|wd|phrase)|pwd|api[_-]?key|access[_-]?key", re.IGNORECASE)
 
 
 def _looks_nonsecret_value(value: str) -> bool:
@@ -170,12 +169,19 @@ def _looks_nonsecret_value(value: str) -> bool:
     return False
 
 
-def _is_prose_value(value: str) -> bool:
-    """True if a quoted value reads as an English phrase: it contains a space and
-    only letters, apostrophes, hyphens and optional sentence punctuation — no
-    digits, no symbols. Passphrase-named keys are exempt at the call site, since a
-    passphrase is the one credential whose value legitimately contains spaces."""
-    return " " in value and bool(_PROSE_VALUE.match(value))
+def _is_label_echo(name: str, value: str) -> bool:
+    """True if a quoted value reads as an English phrase AND echoes the credential
+    word in its own key's name ("secrets: \\"Leaked secrets\\""). UI labels echo by
+    design; real values do not. Spacey values that do NOT echo — a passphrase on a
+    generically-named key — still surface: silence there would hide the one
+    credential class whose values legitimately contain spaces."""
+    m = _CRED_WORD.search(name)
+    return (
+        " " in value
+        and bool(_PROSE_VALUE.match(value))
+        and m is not None
+        and m.group(0).lower() in value.lower()
+    )
 
 
 def _is_allowlisted(line: str) -> bool:
@@ -259,7 +265,13 @@ def _has_key_body(added: list[tuple[int, str]], idx: int) -> bool:
     lines between header and body are tolerated by scanning a short window.
     """
     for _, line in added[idx + 1 : idx + 41]:
-        if _PEM_BODY.match(line.strip()):
+        stripped = line.strip()
+        if stripped.startswith("-----BEGIN") or stripped.startswith("-----END"):
+            # Another PEM section started before any body line appeared: base64
+            # after this point belongs to THAT section (e.g. a certificate example
+            # following our bare header), not to the key we are checking.
+            return False
+        if _PEM_BODY.match(stripped):
             return True
     return False
 
@@ -347,8 +359,11 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                     multi_line_body = _has_key_body(added, idx)
                     inline_body = _has_inline_body(content[m.end():])
                     if not multi_line_body and not inline_body:
-                        matched = True  # a real match existed here; don't also fall through to the generic tier
-                        break
+                        # Nothing to surface — and nothing real matched, so do NOT
+                        # set the one-finding-per-line veto: a generic credential
+                        # assignment sharing this line must still be examined by
+                        # the tier below.
+                        continue
                     if inline_body and not multi_line_body:
                         # Real-shaped key material crammed onto one line (an env-var
                         # string literal). Surfaced as advisory on every path — a
@@ -373,10 +388,12 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                 continue  # one finding per line; CERTAIN wins over HIGH
 
             a = _ASSIGNMENT.search(content)
-            if a is not None and _is_prose_value(a.group("value")) and not _PASSPHRASE_NAME.search(a.group("name")):
-                # Quoted tier only: an English-phrase value is a UI label or human
-                # string, not a credential. Unquoted .env values with spaces stay
-                # advisory — there they are genuinely ambiguous.
+            if a is not None and _is_label_echo(a.group("name"), a.group("value")):
+                # Quoted tier only: a phrase value that echoes its own credential
+                # name is a UI label, not a credential. Spacey non-echoing values
+                # (passphrases on generically-named keys) still surface below.
+                # Unquoted .env values with spaces stay advisory — genuinely
+                # ambiguous there.
                 continue
             if a is None:
                 a = _ASSIGNMENT_UNQUOTED.search(content) if _DOTENV_PATH.search(path) else None
