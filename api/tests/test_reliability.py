@@ -10,8 +10,6 @@ test_scans_api.py; only Redis is faked, since there's no live Redis in CI.
 """
 
 import sys
-
-import pytest
 from datetime import datetime, timedelta
 
 import pytest
