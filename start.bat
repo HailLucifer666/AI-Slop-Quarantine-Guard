@@ -238,10 +238,10 @@ if errorlevel 1 (
     echo         OK - Python packages found.
 )
 
-if not exist "%~dp0api\.env" (
+if not exist "%~dp0.env" (
     if exist "%~dp0.env.example" (
-        copy "%~dp0.env.example" "%~dp0api\.env" >nul
-        echo         Auto-copied .env.example -^> api\.env
+        copy "%~dp0.env.example" "%~dp0.env" >nul
+        echo         Auto-copied .env.example -^> .env
     )
 )
 if not exist "%~dp0web\.env.local" (
