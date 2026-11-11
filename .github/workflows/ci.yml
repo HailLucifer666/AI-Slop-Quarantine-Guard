@@ -38,7 +38,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e api[dev] mypy==1.19.1
-      - run: mypy api/app
+      # Run from api/ so mypy finds [tool.mypy] in api/pyproject.toml
+      # (config discovery walks up from the CWD, not down from the repo root).
+      - run: cd api && mypy app
 
   test:
     runs-on: ubuntu-latest
