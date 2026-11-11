@@ -76,6 +76,7 @@ async def create_scan(source: str, ref: str) -> int:
         await session.flush()  # assigns scan.id without closing the transaction
         _audit(session, "scan.created", {"scan_id": scan.id, "source": source, "ref": ref})
         await session.commit()  # single atomic commit: scan row + audit row together
+        assert scan.id is not None  # flushed above; mypy needs the narrowing
         return scan.id
 
 
@@ -147,16 +148,18 @@ async def reconcile_stale_scans() -> list[int]:
             )
         ).scalars().all()
 
-    for scan_id in stale_ids:
+    stale_ids_clean = [sid for sid in stale_ids if sid is not None]
+
+    for scan_id in stale_ids_clean:
         await fail_scan(
             scan_id,
             f"worker heartbeat lease expired (no update for over {STALE_LEASE_SECONDS}s) — "
             "the worker process most likely stopped mid-scan. No results were produced; "
             "re-run the scan.",
         )
-    if stale_ids:
-        logger.warning("reconciled %d stale running scan(s): %s", len(stale_ids), stale_ids)
-    return list(stale_ids)
+    if stale_ids_clean:
+        logger.warning("reconciled %d stale running scan(s): %s", len(stale_ids_clean), stale_ids_clean)
+    return stale_ids_clean
 
 
 async def touch_worker_heartbeat() -> None:
@@ -267,6 +270,12 @@ async def fail_scan(scan_id: int, reason: str) -> None:
 
 
 def _row_to_dict(scan: Scan, *, include_findings: bool = False) -> dict:
+    # Narrow before loads(): these columns are nullable, and getattr(...) does not
+    # narrow the attribute for mypy.
+    coverage_json = getattr(scan, "coverage_json", None)
+    groups_json = getattr(scan, "groups_json", None)
+    progress_json = getattr(scan, "progress", None)
+    engine_versions_json = getattr(scan, "engine_versions_json", None)
     data = {
         "id": scan.id,
         "source": scan.source,
@@ -277,17 +286,17 @@ def _row_to_dict(scan: Scan, *, include_findings: bool = False) -> dict:
         "duration_ms": scan.duration_ms,
         "error": scan.error,
         "analytics": json.loads(scan.analytics_json) if scan.analytics_json else None,
-        "coverage": json.loads(scan.coverage_json) if getattr(scan, "coverage_json", None) else None,
-        "groups": json.loads(scan.groups_json) if getattr(scan, "groups_json", None) else None,
-        "progress": json.loads(scan.progress) if getattr(scan, "progress", None) else None,
+        "coverage": json.loads(coverage_json) if coverage_json else None,
+        "groups": json.loads(groups_json) if groups_json else None,
+        "progress": json.loads(progress_json) if progress_json else None,
         # Provenance — what was analyzed, so the result can be re-derived and checked.
         "resolved_sha": getattr(scan, "resolved_sha", None),
         "content_hash": getattr(scan, "content_hash", None),
         "file_count": getattr(scan, "file_count", None),
         "ingested_at": _iso_utc(getattr(scan, "ingested_at", None)),
         "engine_versions": (
-            json.loads(scan.engine_versions_json)
-            if getattr(scan, "engine_versions_json", None) else None
+            json.loads(engine_versions_json)
+            if engine_versions_json else None
         ),
         "skipped": json.loads(scan.skipped_json) if scan.skipped_json else [],
         "suppressed": json.loads(scan.suppressed_json) if scan.suppressed_json else [],

@@ -128,6 +128,8 @@ def _if_returning_booleans(node: ast.If) -> Optional[Rewrite]:
     then, other = node.body[0], node.orelse[0]
     if not isinstance(then, ast.Return) or not isinstance(other, ast.Return):
         return None
+    if then.value is None or other.value is None:
+        return None
     if _is_const(then.value, True) and _is_const(other.value, False):
         test: ast.expr = node.test
     elif _is_const(then.value, False) and _is_const(other.value, True):
@@ -180,10 +182,13 @@ def _membership_to_get(node: ast.If) -> Optional[Rewrite]:
         return None
     if not _same(lookup.value, container) or not _same(lookup.slice, key):
         return None
+    default_expr = other[1]
+    if not isinstance(default_expr, ast.expr):
+        return None
     return (
         "membership test guarding a dict lookup",
         "dict.get() with a default",
-        f"{name} = {_get_call(container, key, other[1])}",
+        f"{name} = {_get_call(container, key, default_expr)}",
     )
 
 
@@ -200,17 +205,26 @@ def _try_keyerror_to_get(node: ast.Try) -> Optional[Rewrite]:
     if node.orelse or node.finalbody or len(node.handlers) != 1 or len(node.body) != 1:
         return None
     handler = node.handlers[0]
+    if not isinstance(handler.type, ast.expr):
+        return None
     if _name(handler.type) != "KeyError" or handler.name or len(handler.body) != 1:
         return None
 
     tried, fallback = node.body[0], handler.body[0]
     if isinstance(tried, ast.Return) and isinstance(fallback, ast.Return):
-        lookup, default, prefix = tried.value, fallback.value, "return "
+        lookup: ast.expr | None = tried.value
+        default: ast.expr | None = fallback.value
+        prefix = "return "
     else:
-        first, second = _single_assign(tried), _single_assign(fallback)
+        first = _single_assign(tried)
+        second = _single_assign(fallback)
         if not first or not second or first[0] != second[0]:
             return None
-        lookup, default, prefix = first[1], second[1], f"{first[0]} = "
+        if not isinstance(first[1], ast.expr) or not isinstance(second[1], ast.expr):
+            return None
+        lookup = first[1]
+        default = second[1]
+        prefix = f"{first[0]} = "
     if not isinstance(lookup, ast.Subscript) or default is None:
         return None
     return (
@@ -289,6 +303,8 @@ def _search_loop_to_any(node: ast.For, following: Optional[ast.AST]) -> Optional
         return None
     returned = inner.body[0]
     if not isinstance(returned, ast.Return):
+        return None
+    if returned.value is None or following.value is None:
         return None
 
     if _is_const(returned.value, True) and _is_const(following.value, False):
@@ -380,18 +396,18 @@ async def check_simplify(diff: str, repo_context: dict) -> List[Finding]:
         if not path.lower().endswith(_PY_EXT):
             continue
         if one_arg is not None:
-            content = await one_arg(path)
+            src = await one_arg(path)
         else:
-            content = await _default_fetch(repo, path, head_sha, token)
-        if not content:
+            src = await _default_fetch(repo, path, head_sha, token)
+        if not src:
             continue  # unfetchable → silent, same fail-safe as the other analyzers
 
         try:
-            tree = ast.parse(content)
+            tree = ast.parse(src)
         except (SyntaxError, ValueError, RecursionError):
             continue  # unparseable file → no claim about it
 
-        lines = content.splitlines()
+        lines = src.splitlines()
         for start, end, (label, shorter, replacement) in _find_rewrites(tree):
             if start not in added:
                 continue  # region is pre-existing code, not this change

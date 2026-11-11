@@ -161,6 +161,10 @@ async def check_licenses(
     repo = repo_context.get("repo")
     head_sha = repo_context.get("head_sha")
     token = repo_context.get("token")
+    # repo_context values come from a plain dict; narrow before using them as str.
+    assert isinstance(repo, str)
+    assert isinstance(head_sha, str)
+    assert isinstance(token, str)
 
     added_by_file: dict[str, List[tuple[int, str]]] = {}
     for path, line, content in parse_diff(diff):
@@ -174,13 +178,13 @@ async def check_licenses(
                 if content is None:
                     continue
                 for name, label in composer_lock_licenses(content):
-                    line = _name_present(name, added)
-                    if line is None:
+                    lock_line = _name_present(name, added)
+                    if lock_line is None:
                         continue  # not introduced by this PR
                     m = _COPYLEFT.search(label)
                     if m:
                         findings.append(
-                            _finding(name, label, m.group(0), path, line, source="lockfile")
+                            _finding(name, label, m.group(0), path, lock_line, source="lockfile")
                         )
                 continue
 
@@ -191,13 +195,13 @@ async def check_licenses(
             if content is None:
                 continue  # unfetchable manifest → silent (protects zero-FP)
             for name in extract_dependency_names(path, content):
-                line = _name_present(name, added)
-                if line is None:
+                manifest_line = _name_present(name, added)
+                if manifest_line is None:
                     continue  # not introduced by this PR
                 label = await fetch_license(ecosystem, name, client)
                 if not label:
                     continue  # unreachable or no license → silent
                 m = _COPYLEFT.search(label)
                 if m:
-                    findings.append(_finding(name, label, m.group(0), path, line))
+                    findings.append(_finding(name, label, m.group(0), path, manifest_line))
     return findings

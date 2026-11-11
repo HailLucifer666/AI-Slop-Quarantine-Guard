@@ -31,6 +31,26 @@ class _OkRedis:
         return True
 
 
+class _FakeAwaitable:
+    def __init__(self, value):
+        self._value = value
+
+    def __await__(self):
+        async def _finish():
+            return self._value
+        return _finish().__await__()
+
+
+@pytest.mark.asyncio
+async def test_await_result_unwraps_awaitable_and_passthrough():
+    """Mutation (2026-11-11): drop the isinstance branch -> an already-awaited
+    plain value (redis stubs union Awaitable[T] | T) is returned but a real
+    awaitable would be returned unawaited and this test fails."""
+    assert await queue._await_result(_FakeAwaitable(7)) == 7
+    assert await queue._await_result("plain") == "plain"
+    assert await queue._await_result(None) is None
+
+
 @pytest.mark.asyncio
 async def test_ping_redis_false_when_client_raises(monkeypatch):
     """Mutation (2026-11-11): drop the `except Exception` in ping_redis -> the

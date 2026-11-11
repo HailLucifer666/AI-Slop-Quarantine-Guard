@@ -16,7 +16,7 @@ import asyncio
 import json
 import os
 import sys
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from app.coverage import take_census
 from app.ingest import IngestError, content_hash, head_sha, walk_dir
@@ -33,7 +33,7 @@ _STATUS_MARK = {
 }
 
 
-async def _offline_overrides() -> Dict[str, object]:
+async def _offline_overrides() -> Dict[str, Callable[..., Any]]:
     """Boundaries stubbed so a run works with no network.
 
     Returns UNKNOWN/empty rather than "fine": an offline run must not be able to
