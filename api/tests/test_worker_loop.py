@@ -55,3 +55,24 @@ async def test_safe_brpop_returns_item_on_success():
         "slopguard:scan_queue",
         '{"kind": "scan", "scan_id": 1}',
     )
+
+
+@pytest.mark.asyncio
+async def test_refresh_redis_state_logs_restore_once(monkeypatch):
+    """Mutation (2026-11-11): remove the ping_redis() check in
+    _refresh_redis_state -> was_down never flips and this test fails."""
+    calls = {"n": 0}
+
+    async def fake_ping():
+        calls["n"] += 1
+        return calls["n"] >= 2  # first: still down; second: restored
+
+    monkeypatch.setattr(worker, "ping_redis", fake_ping)
+
+    # Still down -> was_down stays True, no flip.
+    assert await worker._refresh_redis_state(True) is True
+    # Redis back -> was_down flips False.
+    assert await worker._refresh_redis_state(True) is False
+    # Healthy path (was_down=False) -> never pings, stays False.
+    assert await worker._refresh_redis_state(False) is False
+    assert calls["n"] == 2

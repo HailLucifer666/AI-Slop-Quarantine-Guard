@@ -264,6 +264,19 @@ async def handle_scan_job(job: dict) -> None:
         logger.exception("scan %s failed", scan_id)
 
 
+async def _refresh_redis_state(was_down: bool) -> bool:
+    """Return the updated was_down flag; log the restore transition (once).
+
+    Called only while ``was_down`` so a healthy idle queue never costs a PING
+    or a log line. A successful PING means Redis is back even with an empty
+    queue — the worker should say so instead of waiting for the first job.
+    """
+    if was_down and await ping_redis():
+        logger.info("Redis connection restored at %s — resuming consumption", settings.redis_url)
+        return False
+    return was_down
+
+
 async def run_worker() -> None:
     """Consume both queues forever: PR webhooks → analyze_pr, scan jobs → handle_scan_job."""
     redis = get_redis()
@@ -301,7 +314,13 @@ async def run_worker() -> None:
             continue
 
         if item is None:
-            continue  # idle BRPOP expiry — queue empty, nothing to do
+            # Idle BRPOP expiry. Mid-outage, a successful PING means Redis is
+            # back even with an empty queue — log the restore and reset.
+            if was_down:
+                was_down = await _refresh_redis_state(was_down)
+                if not was_down:
+                    consecutive_failures = 0
+            continue
 
         if was_down:
             logger.info("Redis connection restored at %s — resuming consumption", settings.redis_url)
