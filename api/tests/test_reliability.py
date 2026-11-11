@@ -9,6 +9,9 @@ Real persistence against a throwaway SQLite file (no DB mocking), matching
 test_scans_api.py; only Redis is faked, since there's no live Redis in CI.
 """
 
+import sys
+
+import pytest
 from datetime import datetime, timedelta
 
 import pytest
@@ -35,6 +38,10 @@ def test_relative_sqlite_path_is_anchored_to_api_dir():
     assert "api" in resolved.replace("\\", "/").split("/")
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows drive-letter path semantics are not meaningful on POSIX (CI is Linux)",
+)
 def test_absolute_sqlite_path_is_left_alone():
     """An absolute Windows path has three slashes too — must not be re-anchored."""
     url = "sqlite:///C:/data/app.db"
