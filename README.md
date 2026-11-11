@@ -79,7 +79,7 @@ either miss the AI-specific failures or cry wolf so often you stop listening.
 
 - **Backend** — Python 3.12 · FastAPI (async) · SQLAlchemy 2.0 · Redis queue + background worker · SQLite by default, PostgreSQL for production. Analyzers are pure-Python/HTTP (no external scanner binaries).
 - **Frontend** — Next.js 15 · React 19 · Tailwind · an "Aurora-on-Black" Command-Wall dashboard.
-- **Quality bar** — 250+ tests; analyzers are gated at **zero false positives** on a negative-fixture set.
+- **Quality bar** — 500+ tests; analyzers are gated at **zero false positives** on the negative-fixture set.
 
 ## Quick start
 

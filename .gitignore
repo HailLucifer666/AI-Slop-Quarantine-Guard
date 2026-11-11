@@ -72,3 +72,17 @@ htmlcov/
 
 # Local package cache created by start.bat when the configured PKG_ROOT drive is absent.
 .pkgcache/
+
+# TypeScript incremental-build cache — regenerated on every web build, machine-specific.
+web/tsconfig.tsbuildinfo
+
+# Local CI-log downloads and kee-preflight artifacts — transient, never source.
+.ci-*
+
+# Local ZCode workspace settings (per-machine agent config).
+.zcode/
+
+# Local stack launchers — manual run helpers that live outside version control.
+run_api.bat
+run_web.bat
+run_worker.bat
