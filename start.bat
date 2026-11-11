@@ -1,67 +1,59 @@
 @echo off
 setlocal EnableDelayedExpansion
+pushd "%~dp0"
+title SQG Launcher
+
 REM ===================================================================
 REM  AI Slop Quarantine Guard - start the full stack (Windows)
-REM  FAST PATH: Setup runs once, cached in .setup-stamp
-REM  Force re-check: pass --check arg or delete .setup-stamp manually
+REM  Opens ONE Windows Terminal window with panes (Web / API / Worker /
+REM  Redis) via wt.exe; falls back to separate windows if wt is missing.
+REM  Setup is cached in .setup-stamp  (re-run: start.bat --check)
 REM ===================================================================
 
-REM ---------------------------------------------------------------
-REM  Package dump location - ALL packages go here, NEVER C:\
-REM ---------------------------------------------------------------
 set PKG_ROOT=F:\C Drive Packages Dump
 set NPM_PREFIX=%PKG_ROOT%\npm-global
 set PIP_TARGET=%PKG_ROOT%\python-packages
 set NODE_PATH=%NPM_PREFIX%\node_modules
 set STAMP_FILE=%~dp0.setup-stamp
 
-REM Make sure the directories exist
 if not exist "%PKG_ROOT%" mkdir "%PKG_ROOT%"
 if not exist "%NPM_PREFIX%" mkdir "%NPM_PREFIX%"
 if not exist "%PIP_TARGET%" mkdir "%PIP_TARGET%"
 
-REM Add pip package bin dirs to PATH so installed CLI tools are found
 set PATH=%PIP_TARGET%\bin;%PIP_TARGET%;%NPM_PREFIX%\bin;%PATH%
-
-REM Tell Python to find packages from our custom target
 set PYTHONPATH=%PIP_TARGET%;%PYTHONPATH%
 
-REM ---------------------------------------------------------------
-REM  Check for --check argument (force full re-run of setup)
-REM ---------------------------------------------------------------
 set FORCE_CHECK=0
 for %%A in (%*) do (
     if "%%A"=="--check" set FORCE_CHECK=1
 )
 
-REM ---------------------------------------------------------------
-REM  Fast path: skip setup if stamp file exists
-REM ---------------------------------------------------------------
-if "!FORCE_CHECK!"=="0" (
-    if exist "!STAMP_FILE!" (
-        echo.
-        echo  ==============================================================
-        echo   AI Slop Quarantine Guard
-        echo   Setup already done. Launching stack...
-        echo   (To re-run setup: delete .setup-stamp and restart)
-        echo  ==============================================================
-        echo.
+if "%FORCE_CHECK%"=="1" goto full_setup
+if not exist "%STAMP_FILE%" goto full_setup
 
-        REM Read PYTHON_CMD and PIP_TARGET from stamp file
-        for /f "usebackq tokens=1,* delims==" %%K in ("!STAMP_FILE!") do (
-            if "%%K"=="PYTHON_CMD" set PYTHON_CMD=%%L
-            if "%%K"=="PIP_TARGET" set PIP_TARGET=%%L
-        )
+echo.
+echo  ==============================================================
+echo   AI Slop Quarantine Guard
+echo   Setup already done. Launching stack...
+echo   (To re-run setup: start.bat --check)
+echo  ==============================================================
+echo.
 
-        set FIRST_RUN=0
-        goto launch
-    )
+set PYTHON_CMD=
+set REDIS_EXE=
+for /f "usebackq tokens=1,* delims==" %%K in ("%STAMP_FILE%") do (
+    if "%%K"=="PYTHON_CMD" set PYTHON_CMD=%%L
+    if "%%K"=="PIP_TARGET" set PIP_TARGET=%%L
+    if "%%K"=="REDIS_EXE" set REDIS_EXE=%%L
 )
 
-REM ---------------------------------------------------------------
-REM  FIRST RUN (or --check): Full setup
-REM ---------------------------------------------------------------
-set FIRST_RUN=1
+if exist "!PYTHON_CMD!" (
+    "!PYTHON_CMD!" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
+    if not errorlevel 1 goto launch
+)
+echo   [WARN] Cached Python invalid or older than 3.10. Re-running setup...
+
+:full_setup
 echo.
 echo  ==============================================================
 echo   AI Slop Quarantine Guard - Setup
@@ -69,16 +61,13 @@ echo   All packages install to: %PKG_ROOT%
 echo  ==============================================================
 echo.
 
-if "!FORCE_CHECK!"=="1" (
-    echo   [SETUP] Forced re-check ^(--check argument^)
+if "%FORCE_CHECK%"=="1" (
+    echo   [SETUP] Forced re-check (--check argument)
 ) else (
-    echo   [SETUP] First run detected - installing dependencies...
+    echo   [SETUP] Setup running - checking dependencies...
 )
 echo.
 
-REM ---------------------------------------------------------------
-REM  STEP 1: Check Node.js
-REM ---------------------------------------------------------------
 echo   [1/5] Checking Node.js...
 where node >nul 2>&1
 if errorlevel 1 (
@@ -102,9 +91,7 @@ if !NODEMAJ! LSS 18 (
 echo         OK - Node.js
 node --version
 
-REM ---------------------------------------------------------------
-REM  STEP 2: Check npm
-REM ---------------------------------------------------------------
+echo.
 echo   [2/5] Checking npm...
 where npm >nul 2>&1
 if errorlevel 1 (
@@ -118,117 +105,95 @@ if errorlevel 1 (
 echo         OK - npm
 npm --version
 
-REM ---------------------------------------------------------------
-REM  STEP 3: Check Python 3.9+
-REM ---------------------------------------------------------------
-echo   [3/5] Checking Python 3.9+...
+echo.
+echo   [3/5] Checking Python 3.10+...
 
 set PYTHON_CMD=
+set PYTHON_EXE=
 set PYTHON_OK=0
 
-for %%C in (py python3 python) do (
-    if "!PYTHON_CMD!"=="" (
-        where %%C >nul 2>&1
+for %%C in ("py -3.14" "py -3.13" "py -3.12" "py -3.11" "py -3" "python" "python3") do (
+    if "!PYTHON_OK!"=="0" (
+        %%~C -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
         if not errorlevel 1 (
-            for /f "tokens=2 delims= " %%V in ('%%C --version 2^>^&1') do (
-                for /f "delims=. tokens=1,2" %%A in ("%%V") do (
-                    if %%A GEQ 3 (
-                        if %%B GEQ 9 (
-                            set PYTHON_CMD=%%C
-                            set PYTHON_VER=%%V
-                            set PYTHON_OK=1
-                        )
-                    )
-                )
-            )
+            set PYTHON_OK=1
+            for /f "delims=" %%I in ('%%~C -c "import sys; print(sys.executable)"') do set PYTHON_EXE=%%I
+            for /f "delims=" %%I in ('%%~C -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"') do set PYTHON_VER=%%I
         )
     )
 )
 
 if "!PYTHON_OK!"=="0" (
     echo.
-    echo   [ERROR] Python 3.9 or higher is NOT found.
+    echo   [ERROR] Python 3.10 or higher is required.
+    echo   Found:
+    py --version 2>nul || python --version 2>nul || echo (no python found)
     echo.
-    echo   Requires Python 3.9+. Install from: https://www.python.org/downloads/
-    echo   During install, check "Add python.exe to PATH"
-    echo.
-    echo   Python versions found on this machine:
-    py --list 2>nul || echo   (py launcher not available)
-    python --version 2>nul || echo   (python not in PATH)
+    echo   Please install Python 3.10+ from: https://www.python.org/downloads/
     echo.
     pause
     exit /b 1
 )
-echo         OK - Python !PYTHON_VER! (using: !PYTHON_CMD!)
 
-REM ---------------------------------------------------------------
-REM  STEP 4: Install / verify Node.js dependencies (local to web/)
-REM ---------------------------------------------------------------
+if "!PYTHON_EXE!"=="" (
+    echo.
+    echo   [ERROR] Could not resolve the Python executable path.
+    echo.
+    pause
+    exit /b 1
+)
+set PYTHON_CMD=!PYTHON_EXE!
+echo         OK - Python !PYTHON_VER!
+echo         Using: !PYTHON_EXE!
+
+echo.
 echo   [4/5] Checking Node.js dependencies (web\node_modules)...
 if not exist "%~dp0web\node_modules\next" (
-    echo         node_modules missing or incomplete - running npm install...
-    echo         Packages will be installed locally inside: %~dp0web\node_modules
-    echo         (This may take 2-4 minutes on first run)
+    echo         node_modules missing - running npm install...
+    echo         (This may take 2-4 minutes)
     pushd "%~dp0web"
     call npm install --prefer-offline
     if errorlevel 1 (
         echo.
-        echo   [ERROR] npm install failed. Check internet connection and try again.
+        echo   [ERROR] npm install failed. Check internet connection.
+        echo.
+        popd
+        pause
+        exit /b 1
+    )
+    if not exist "%~dp0web\node_modules\next\dist\bin\next" (
+        echo.
+        echo   [ERROR] npm install finished but Next.js binary is missing.
+        echo   Delete web\node_modules and run start.bat again.
         echo.
         popd
         pause
         exit /b 1
     )
     popd
-    echo         Node dependencies installed successfully.
+    echo         Node dependencies installed.
 ) else (
     echo         OK - web\node_modules found.
 )
 
-REM ---------------------------------------------------------------
-REM  STEP 5: Install / verify Python dependencies
-REM          --target installs to F:\C Drive Packages Dump\python-packages
-REM          NEVER installs to C:\ or the system Python site-packages
-REM ---------------------------------------------------------------
+echo.
 echo   [5/5] Checking Python dependencies...
 echo         Target: %PIP_TARGET%
 
-REM Quick check for key packages in our custom target
-!PYTHON_CMD! -c "import sys; sys.path.insert(0,'%PIP_TARGET%'); import uvicorn, httpx, fastapi" >nul 2>&1
+"!PYTHON_CMD!" -c "import sys; sys.path.insert(0,r'%PIP_TARGET%'); import uvicorn, httpx, fastapi, pydantic, pydantic_core" >nul 2>&1
 if errorlevel 1 (
-    echo         Python packages missing in target dir - installing now...
-    echo         (This may take 2-4 minutes on first run)
-
-    REM Upgrade pip itself (to our target dir)
-    !PYTHON_CMD! -m pip install --upgrade pip --target "%PIP_TARGET%" --quiet
-
-    REM Try installing from pyproject.toml first
+    echo         Python packages missing - installing now...
+    echo         (This may take 2-4 minutes)
+    "!PYTHON_CMD!" -m pip install --no-user --upgrade pip --target "%PIP_TARGET%" --quiet
     pushd "%~dp0api"
-    !PYTHON_CMD! -m pip install ".[dev]" --target "%PIP_TARGET%" --quiet 2>nul
+    "!PYTHON_CMD!" -m pip install --no-user ".[dev]" --target "%PIP_TARGET%" --quiet 2>nul
     if errorlevel 1 (
         echo         pyproject install failed - installing packages individually...
-        !PYTHON_CMD! -m pip install ^
-            fastapi ^
-            "uvicorn[standard]" ^
-            httpx ^
-            "sqlalchemy[asyncio]" ^
-            aiosqlite ^
-            asyncpg ^
-            alembic ^
-            pydantic ^
-            pydantic-settings ^
-            structlog ^
-            arq ^
-            redis ^
-            "python-jose[cryptography]" ^
-            PyJWT ^
-            pathspec ^
-            python-multipart ^
-            --target "%PIP_TARGET%" --quiet
+        "!PYTHON_CMD!" -m pip install --no-user fastapi "uvicorn[standard]" httpx "sqlalchemy[asyncio]" aiosqlite asyncpg alembic pydantic pydantic-settings structlog arq redis "python-jose[cryptography]" PyJWT pathspec python-multipart --target "%PIP_TARGET%" --quiet
         if errorlevel 1 (
             echo.
             echo   [ERROR] Python dependency installation failed.
-            echo   Check internet connection and Python version (need 3.9+).
+            echo   Check internet connection and Python version (need 3.10+).
             echo.
             popd
             pause
@@ -238,49 +203,61 @@ if errorlevel 1 (
     popd
     echo         Python dependencies installed to: %PIP_TARGET%
 ) else (
-    echo         OK - Python packages found in target dir.
+    echo         OK - Python packages found.
 )
 
-REM ---------------------------------------------------------------
-REM  Auto-copy .env example files if missing (working defaults)
-REM ---------------------------------------------------------------
 if not exist "%~dp0api\.env" (
     if exist "%~dp0.env.example" (
         copy "%~dp0.env.example" "%~dp0api\.env" >nul
         echo         Auto-copied .env.example -^> api\.env
-    ) else (
-        echo         [WARN] api\.env not found and no .env.example to copy from.
     )
 )
 if not exist "%~dp0web\.env.local" (
     if exist "%~dp0web\.env.example" (
         copy "%~dp0web\.env.example" "%~dp0web\.env.local" >nul
         echo         Auto-copied web\.env.example -^> web\.env.local
-    ) else (
-        echo         [WARN] web\.env.local not found and no web\.env.example to copy from.
     )
 )
 
-REM ---------------------------------------------------------------
-REM  Wipe Next.js cache on first run only (prevents stale-build crashes)
-REM ---------------------------------------------------------------
 if exist "%~dp0web\.next" (
     echo         Clearing stale Next.js build cache...
     rmdir /s /q "%~dp0web\.next"
 )
 
-REM ---------------------------------------------------------------
-REM  Write stamp file - skips setup on all future runs
-REM ---------------------------------------------------------------
+echo.
+echo   [6/6] Checking Redis for Windows...
+set REDIS_EXE=
+if exist "%PKG_ROOT%\redis\redis-server.exe" (
+    set REDIS_EXE=%PKG_ROOT%\redis\redis-server.exe
+    echo         OK - Redis already present.
+) else (
+    echo         Bootstraping Redis (one-time download ~3 MB)...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\get-redis.ps1" -InstallDir "%PKG_ROOT%\redis"
+    if errorlevel 1 (
+        echo.
+        echo   [WARN] Redis download failed - continuing without Redis.
+        echo   API will report redis:false; the worker will keep retrying.
+        echo   (Re-run start.bat --check to try again.)
+    ) else (
+        if exist "%PKG_ROOT%\redis\redis-path.txt" (
+            for /f "usebackq delims=" %%R in ("%PKG_ROOT%\redis\redis-path.txt") do set REDIS_EXE=%%R
+        )
+        if "!REDIS_EXE!"=="" set REDIS_EXE=%PKG_ROOT%\redis\redis-server.exe
+        echo         OK - Redis ready: !REDIS_EXE!
+    )
+)
+
+echo.
+echo   Writing setup stamp...
 (
-    echo PYTHON_CMD=!PYTHON_CMD!
+    echo PYTHON_CMD=!PYTHON_EXE!
     echo PIP_TARGET=%PIP_TARGET%
+    if not "!REDIS_EXE!"=="" echo REDIS_EXE=!REDIS_EXE!
     echo SETUP_DATE=%date%
 ) > "!STAMP_FILE!"
 
 echo.
-echo   Setup complete. Launching stack...
-echo   (To re-run setup: delete .setup-stamp and restart)
+echo   Setup complete.
 
 :launch
 echo.
@@ -289,56 +266,84 @@ echo   Starting stack...
 echo  ==============================================================
 echo.
 
-REM Rebuild PATH/PYTHONPATH with correct PIP_TARGET (stamp may have overridden it)
-REM Include api dir here so child processes inherit it — avoids && in wt args
 set PATH=%PIP_TARGET%\bin;%PIP_TARGET%;%NPM_PREFIX%\bin;%PATH%
 set PYTHONPATH=%PIP_TARGET%;%~dp0api;%PYTHONPATH%
 
-REM ---------------------------------------------------------------
-REM  Free ports
-REM ---------------------------------------------------------------
-echo   Freeing ports 3000-3002 and 8000 (closing any stale servers)...
+if "!PYTHON_CMD!"=="" (
+    echo   [ERROR] Python 3.10+ not found. Cannot start API server.
+    echo   Install Python from: https://www.python.org/downloads/
+    echo.
+    pause
+    exit /b 1
+)
+
+set CHILD_PYTHON=!PYTHON_CMD!
+set SQG_PIP_TARGET=%PIP_TARGET%
+echo   Using Python: "!CHILD_PYTHON!"
+if not "!REDIS_EXE!"=="" echo   Using Redis: "!REDIS_EXE!"
+echo.
+
+echo   Freeing ports 3000-3002 and 8000 (closing stale servers)...
 powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -LocalPort 3000,3001,3002,8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }"
 
-REM ---------------------------------------------------------------
-REM  Build env vars for child processes
-REM  PYTHONPATH is inherited from this process — no inline set needed
-REM ---------------------------------------------------------------
-set CHILD_PYTHON=!PYTHON_CMD!
-
-echo   Launching stack...
-echo.
-
+REM One window, wt.exe panes: Web fills the left column; API / Worker / Redis
+REM stack in the right column. No && inside wt args (that historical misparse is
+REM what produced stray tabs). %VAR% is expanded by CMD before wt sees the line.
 where wt >nul 2>&1
-if errorlevel 1 goto fallback
+if errorlevel 1 goto launch_legacy
 
-REM One Windows Terminal window — three split panes, no separate tabs.
-REM new-tab opens the first pane; split-pane -V divides left/right;
-REM split-pane -H then divides the right pane top/bottom.
-wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "npm run dev" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "!CHILD_PYTHON! -m uvicorn app.main:app --host 127.0.0.1 --port 8000" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "!CHILD_PYTHON! -m app.worker"
-goto open
-
-:fallback
-REM Windows Terminal not found - fall back to 3 separate windows.
-start "SQG API"    /D "%~dp0api" cmd /k "!CHILD_PYTHON! -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
-start "SQG Worker" /D "%~dp0api" cmd /k "!CHILD_PYTHON! -m app.worker"
-start "SQG Web"    /D "%~dp0web" cmd /k "npm run dev"
-
-:open
-echo.
-echo   Stack is starting up!
-if "!FIRST_RUN!"=="1" (
-    echo   - First compile takes ~20-40s - this is normal.
+echo   Opening one Windows Terminal window with panes (Web / API / Worker / Redis)...
+if "!REDIS_EXE!"=="" (
+    wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "%~dp0run_web.bat" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "%~dp0run_api.bat" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "%~dp0run_worker.bat"
 ) else (
-    echo   - Using cached build - should be ready in ~3s.
+    wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "%~dp0run_web.bat" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "%~dp0run_api.bat" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "%~dp0run_worker.bat" ; split-pane -H --title "SQG Redis" -d "%~dp0" cmd /k "%~dp0run_redis.bat"
 )
+if not errorlevel 1 goto launch_wait
+echo   [WARN] wt.exe failed - falling back to separate windows.
+
+:launch_legacy
+echo   Opening separate terminal windows (Web, API, Worker, Redis)...
+set "PORT=3000"
+start "SQG Web (Next.js - Port 3000)" cmd /k "%~dp0run_web.bat"
+start "SQG API (FastAPI - Port 8000)" cmd /k "%~dp0run_api.bat"
+start "SQG Worker (Scanner)" cmd /k "%~dp0run_worker.bat"
+if not "!REDIS_EXE!"=="" start "SQG Redis" cmd /k "%~dp0run_redis.bat"
+
+:launch_wait
+echo.
+echo   Waiting for http://localhost:3000 to come up...
+echo   (First build can take 20-60 seconds - please wait)
+powershell -NoProfile -Command "for($i=0;$i -lt 150;$i++){try{$r=Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 2; if($r.StatusCode -ge 200){exit 0}}catch{}; Start-Sleep -Milliseconds 500}; exit 1"
+
+if errorlevel 1 (
+    echo.
+    echo   [WARN] The dashboard did not respond in time.
+    echo   Look at the "SQG Web" window for the error.
+    echo   You can also open http://localhost:3000 manually.
+) else (
+    echo   Dashboard is up - opening browser.
+    start "" http://localhost:3000
+)
+
+echo.
+echo  ==============================================================
+echo   AI Slop Quarantine Guard is RUNNING!
+echo  ==============================================================
+echo.
 echo   - Dashboard: http://localhost:3000
 echo   - API:       http://localhost:8000
-echo   - Packages:  %PKG_ROOT%
+echo   - Worker:    Active
 echo.
-if "!FIRST_RUN!"=="1" (
-    timeout /t 18 /nobreak >nul
-) else (
-    timeout /t 8 /nobreak >nul
-)
-start "" http://localhost:3000
+echo   Keep this window open while using the application.
+echo   Press any key to STOP all services...
+pause >nul
+
+echo.
+echo   Stopping services and freeing ports...
+powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -LocalPort 3000,3001,3002,8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }"
+REM Stop only the Redis started by this launcher (command-line marker), never any
+REM other redis-server instance on the machine.
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*sqg-redis*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+echo   Done.
+popd
+exit /b 0
