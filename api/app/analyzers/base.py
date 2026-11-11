@@ -14,7 +14,8 @@ from enum import Enum
 
 # Revision of the built-in rule set. Bump on any change to detection logic so findings
 # recorded by different revisions stay distinguishable in a stored scan.
-RULE_VERSION = "1.0"
+# 1.1 — 2026-11-12: SQG002 key-material requirement + label-echo skip; SQG003 TODO marker forms.
+RULE_VERSION = "1.1"
 
 
 class Confidence(str, Enum):
