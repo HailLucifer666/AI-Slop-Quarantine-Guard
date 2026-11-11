@@ -19,7 +19,7 @@ def test_walk_dir_reads_source_skips_vendored_and_binary(tmp_path):
     (tmp_path / "logo.png").write_bytes(b"\x89PNG\x00\x00binary")
 
     _res = walk_dir(str(tmp_path))
-    files, skipped = _res.files, _res.skipped
+    files = _res.files
 
     assert "app.py" in files
     assert not any("node_modules" in p for p in files)  # ignored dir
@@ -219,7 +219,7 @@ def _zip(entries: dict) -> bytes:
 def test_read_zip_basic_and_strips_common_prefix():
     data = _zip({"repo-main/app.py": "a = 1", "repo-main/util.py": "b = 2"})
     _res = read_zip(data)
-    files, skipped = _res.files, _res.skipped
+    files = _res.files
     assert set(files) == {"app.py", "util.py"}  # top-level "repo-main/" stripped
 
 

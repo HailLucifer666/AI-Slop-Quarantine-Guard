@@ -1,6 +1,5 @@
 """Rate limiting must count the end client, not the proxy in front of it."""
 
-import pytest
 from starlette.requests import Request
 
 from app.api_security import _client_ip
