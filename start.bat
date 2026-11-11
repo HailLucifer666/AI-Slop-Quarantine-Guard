@@ -293,10 +293,13 @@ where wt >nul 2>&1
 if errorlevel 1 goto launch_legacy
 
 echo   Opening one Windows Terminal window with panes (Web / API / Worker / Redis)...
+REM Note: -d "%~dp0." — bare %~dp0 ends in a backslash and the escaped quote
+REM swallows the closing quote, mangling the pane's command (web/api panes end
+REM with a letter, so they never hit it).
 if "!REDIS_EXE!"=="" (
     wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "%~dp0run_web.bat" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "%~dp0run_api.bat" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "%~dp0run_worker.bat"
 ) else (
-    wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "%~dp0run_web.bat" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "%~dp0run_api.bat" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "%~dp0run_worker.bat" ; split-pane -H --title "SQG Redis" -d "%~dp0" cmd /k "%~dp0run_redis.bat"
+    wt -w new new-tab --title "SQG Web" -d "%~dp0web" cmd /k "%~dp0run_web.bat" ; split-pane -V --title "SQG API" -d "%~dp0api" cmd /k "%~dp0run_api.bat" ; split-pane -H --title "SQG Worker" -d "%~dp0api" cmd /k "%~dp0run_worker.bat" ; split-pane -H --title "SQG Redis" -d "%~dp0." cmd /k "%~dp0run_redis.bat"
 )
 if not errorlevel 1 goto launch_wait
 echo   [WARN] wt.exe failed - falling back to separate windows.
