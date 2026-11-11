@@ -479,3 +479,17 @@ scratchpad detector moves to SQG008.
 Every major choice is tracked here with context + rationale. Future decisions build on these.
 
 **Guiding principle:** Honesty through verifiable truth. No hype. No over-engineering. Simplicity over flexibility.
+
+---
+
+## ADR-023: The Scanner Adapts; Scanned Code Never Carries Suppression Annotations
+
+**Date:** 2026-11-12  
+**Status:** ACCEPTED (owner decision, Arghya)  
+**Context:** self-scan #15 produced 14 false alarms; the first fix proposal used inline `sqg:ignore` markers in the Guard's own source. Rejected by the owner: "this is a scanner — it needs to scan and find. It needs to adapt."
+
+**Decision.** False alarms are detector bugs: they are fixed by tuning the detector, each change red-first tested with a keeper test proving no recall loss, gated on the accuracy corpus (1.0/1.0). The Guard's own repo never carries ignore-markers. The one hit with no sound tuning — bare XXX in the detector's own regex documentation (`placeholders.py:39`), indistinguishable in shape from a slop XXX — is accepted and PINNED by `test_known_self_reference_advisory_is_pinned` as a documented known self-reference advisory. The scanner flagging its own documentation is the scanner proving it works, not noise to hide.
+
+**Why.** A scanner that requires users to sprinkle ignore-comments offloads the detector's job onto its users. Annotations inside the Guard's own source would also be the harness grading itself leniently.
+
+**Consequence for Phase 4 (suppression feature).** Inline suppression exists as an opt-in ADOPTION feature for users' *accepted* findings only — grammar frozen 2026-11-12 in `docs/PLAN.md` (Phase 4, Step 4.5): `slopguard: ignore SQGnnn -- reason`, rule ids explicit, no wildcard, reasons required, receipts always printed, never able to hide block-eligible findings (those require a base-branch baseline). False alarms never route through it.

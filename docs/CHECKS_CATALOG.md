@@ -93,6 +93,8 @@ Each check is normalized into one universal **Finding** record:
 - **Commit-diff mapping:** only flag secrets in *newly added* lines (not pre-existing).
 - **Format checksum:** AWS keys start with `AKIA`, Stripe keys with `sk_live_` or `sk_test_`, etc. Match exact format before flagging as `CERTAIN`.
 - **Path allowlist:** skip `*.example`, `test/fixtures/`, `docs/examples/`, `.github/workflows/` (CI examples).
+- **No key material, no finding (2026-11-12):** a PEM BEGIN header with no key material near it — a bare header quoted in docs or in this repo's own detector docstrings, or a truncated `...` skeleton in an env value — produces **no finding on any path**. Key material is what surfaces, never the public header string. Real material crammed onto one physical line (compose/env string literals) is still surfaced as HIGH advisory, never CERTAIN.
+- **Prose values are not credentials (2026-11-12):** a quoted value that reads as an English phrase (contains a space; no digits or symbols) on a credential-named key is skipped — except `password`/`passphrase`-named keys, whose values legitimately contain spaces and still surface as HIGH.
 - **Entropy floor:** planned via gitleaks' built-in entropy filter (skip obvious non-secrets like `aaaaaa`). Today the in-process matcher relies on format validation rather than entropy.
 - **Live verification (Phase 9+, not MVP):** Optional second check: call AWS/Stripe/GitHub API with the key to see if it's actually valid. MVP ships offline only.
 
@@ -116,17 +118,22 @@ Each check is normalized into one universal **Finding** record:
 ### False-Positive Controls
 
 - **Scope to code files only:** skip `*.md`, `*.txt`, comments in generated code.
+- **TODO requires its marker form (2026-11-12):** only `TODO:` (with colon, any case) flags — prose that merely mentions "todo" is not a stub. `FIXME`/`HACK`/`XXX` keep their bare-word behavior: a prose sentence and `// XXX fix this` have the same shape, so no sound tightening exists there.
 - **Context window:** look for surrounding implementation; if the function is complete and the TODO is aspirational, downgrade to skip.
 - **Allowlist patterns:** intentional placeholders like `# noqa: E501` or `# type: ignore`.
 - **Regex only for MVP:** tree-sitter AST parsing (context-aware) deferred to Phase 3+; start with regex patterns.
 
 ### Patterns Matched
 
-- `TODO`, `FIXME`, `XXX` comments.
+- `TODO:` comments (marker form with colon, any case); bare `FIXME`, `HACK`, `XXX` comments.
 - `NotImplementedError`, `pass  # TODO`, `throw new NotImplementedError()`.
 - Empty function bodies.
 - Ellipsis (`...`) as body.
 - `print("debug")` left behind.
+
+### Known self-reference advisory
+
+- Bare XXX in the regex's own explanatory comment (`placeholders.py:39`) is a **pinned, accepted self-scan finding** (ADR-023): prose XXX cannot be pattern-separated from slop XXX, and repo-side ignore markers are forbidden by the scanner-adapts principle. `test_known_self_reference_advisory_is_pinned` guards it — re-derive, never delete to make a scan look clean.
 
 ---
 
