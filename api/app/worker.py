@@ -14,6 +14,8 @@ import os
 import time
 from typing import Optional
 
+import redis
+
 from app.analyzers.dependencies import check_dependencies
 from app.analyzers.placeholders import check_placeholders
 from app.analyzers.secrets import check_secrets
@@ -70,8 +72,10 @@ from app.queue import (
     SCAN_QUEUE_KEY,
     WEBHOOK_QUEUE_KEY,
     ack_job,
+    ping_redis,
     recover_orphaned_jobs,
     reserve_job,
+    reset_redis_client,
 )
 from app.scan import ANALYZER_BUDGET, _run_analyzer, run_scan
 from app.store import (
@@ -97,6 +101,42 @@ RELEVANT_ACTIONS = {"opened", "synchronize", "reopened"}
 HEARTBEAT_INTERVAL_S = 20
 # How often the idle worker proves it is alive at all, for /api/health.
 WORKER_HEARTBEAT_INTERVAL_S = 10
+
+# Backoff between Redis reconnect attempts (seconds). An unavailable queue is a
+# condition to wait out, never a crash — same invariant as store's DB guard,
+# extended to the queue layer.
+_BACKOFF_SCHEDULE = (1.0, 2.0, 5.0)
+_BACKOFF_CAP_SECONDS = 10.0
+_REDIS_RESET_AFTER_FAILURES = 3
+
+
+class RedisUnavailable(Exception):
+    """Raised when Redis cannot be reached; the worker backs off and retries."""
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Sleep before retry number ``attempt`` (0-based), capped at 10s."""
+    if attempt < len(_BACKOFF_SCHEDULE):
+        return _BACKOFF_SCHEDULE[attempt]
+    return _BACKOFF_CAP_SECONDS
+
+
+async def _poll_for_job():
+    """Poll each source queue for a job; never let a dead Redis kill the worker.
+
+    Returns ``(source_key, processing_key, raw)`` or ``(None, None, None)`` on
+    an idle pass (everything empty). Raises RedisUnavailable when Redis itself
+    cannot be reached — the caller backs off and retries. Idle and unavailable
+    stay distinguishable so a healthy empty queue is never logged as an outage.
+    """
+    for source_key, proc_key in QUEUE_PAIRS:
+        try:
+            raw = await reserve_job(source_key, proc_key)
+        except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError) as exc:
+            raise RedisUnavailable(str(exc)) from exc
+        if raw is not None:
+            return source_key, proc_key, raw
+    return None, None, None
 
 
 async def analyze_pr(repo: str, pr_number: int, head_sha: str, installation_id: int) -> dict:
@@ -416,6 +456,19 @@ async def handle_scan_job(job: dict) -> None:
         heartbeat.cancel()
 
 
+async def _refresh_redis_state(was_down: bool) -> bool:
+    """Return the updated was_down flag; log the restore transition (once).
+
+    Called only while ``was_down`` so a healthy idle queue never costs a PING
+    or a log line. A successful PING means Redis is back even with an empty
+    queue — the worker should say so instead of waiting for the first job.
+    """
+    if was_down and await ping_redis():
+        logger.info("Redis connection restored at %s — resuming consumption", settings.redis_url)
+        return False
+    return was_down
+
+
 async def run_worker() -> None:
     """Consume both queues forever: PR webhooks → analyze_pr, scan jobs → handle_scan_job.
 
@@ -435,31 +488,62 @@ async def run_worker() -> None:
     await reconcile_stale_scans()
 
     logger.info("worker started, consuming %s + %s", WEBHOOK_QUEUE_KEY, SCAN_QUEUE_KEY)
+
+    if await ping_redis():
+        logger.info("Redis reachable at %s", settings.redis_url)
+    else:
+        logger.warning(
+            "Redis NOT reachable at %s — retrying in background; scans will queue once it's up",
+            settings.redis_url,
+        )
+
+    consecutive_failures = 0
+    was_down = False
     last_liveness = 0.0
     while True:
-        # Prove the worker is alive even while idle, so /api/health can tell "nothing
-        # to do" apart from "process is gone".
-        now = time.monotonic()
-        if now - last_liveness >= WORKER_HEARTBEAT_INTERVAL_S:
-            last_liveness = now
-            try:
-                await touch_worker_heartbeat()
-            except Exception:  # noqa: BLE001 — liveness reporting must not stop work
-                logger.debug("worker liveness stamp dropped")
+        try:
+            # Prove the worker is alive even while idle, so /api/health can tell
+            # "nothing to do" apart from "process is gone".
+            now = time.monotonic()
+            if now - last_liveness >= WORKER_HEARTBEAT_INTERVAL_S:
+                last_liveness = now
+                try:
+                    await touch_worker_heartbeat()
+                except Exception:  # noqa: BLE001 — liveness reporting must not stop work
+                    logger.debug("worker liveness stamp dropped")
 
-        # Redis has no multi-key BRPOPLPUSH, so poll each source in turn (unlike
-        # the old single BRPOP([key1, key2]) call). A brief sleep when both are
-        # empty avoids a hot loop; work is still picked up promptly when present.
-        raw = None
-        key = processing_key = None
-        for source_key, proc_key in QUEUE_PAIRS:
-            raw = await reserve_job(source_key, proc_key)
-            if raw is not None:
-                key, processing_key = source_key, proc_key
-                break
+            key, processing_key, raw = await _poll_for_job()
+        except RedisUnavailable:
+            consecutive_failures += 1
+            if not was_down:
+                # Log once per outage, not once per retry.
+                logger.warning(
+                    "Redis unreachable at %s (attempt %d) — backing off; will keep retrying",
+                    settings.redis_url, consecutive_failures,
+                )
+                was_down = True
+            await asyncio.sleep(_backoff_seconds(consecutive_failures - 1))
+            if consecutive_failures >= _REDIS_RESET_AFTER_FAILURES:
+                # A connection that has failed repeatedly may be stale/broken even
+                # after Redis returns — drop it so the next iteration rebuilds.
+                reset_redis_client()
+                consecutive_failures = 0
+            continue
+
         if raw is None:
+            # Idle pass. Mid-outage, a successful PING means Redis is back even
+            # with an empty queue — log the restore and reset.
+            if was_down:
+                was_down = await _refresh_redis_state(was_down)
+                if not was_down:
+                    consecutive_failures = 0
             await asyncio.sleep(1)
             continue
+
+        if was_down:
+            logger.info("Redis connection restored at %s — resuming consumption", settings.redis_url)
+            was_down = False
+        consecutive_failures = 0
 
         try:
             try:
@@ -500,7 +584,12 @@ async def run_worker() -> None:
         finally:
             # Ack unconditionally: whatever branch handled (or dropped) the job
             # above, it's fully done now — never left in the processing list.
-            await ack_job(processing_key, raw)
+            # If Redis dies mid-ack, leave the job for orphan recovery on the
+            # next start rather than killing the consumer.
+            try:
+                await ack_job(processing_key, raw)
+            except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError):
+                logger.warning("Redis lost during ack of %s — leaving job for recovery", processing_key)
 
 
 def main() -> None:

@@ -9,6 +9,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
+import redis
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,7 +17,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.db.session import init_db
 from app.health_router import router as health_router
-from app.queue import already_seen, enqueue_webhook_delivery, release_delivery
+from app.queue import already_seen, enqueue_webhook_delivery, ping_redis, release_delivery
 from app.scans_router import router as scans_router
 from app.crew_router import router as crew_router
 from app.audit_router import router as audit_router
@@ -88,8 +89,9 @@ app.include_router(health_router)
 
 @app.get("/healthz")
 async def healthz():
-    """Health check endpoint."""
-    return {"status": "ok"}
+    """Health check endpoint. redis=false means the worker is retrying in the
+    background — not that the API is broken (Redis is a soft dependency)."""
+    return {"status": "ok", "redis": await ping_redis()}
 
 
 @app.post("/webhooks/github")
@@ -123,19 +125,21 @@ async def github_webhook(request: Request):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="malformed JSON body")
 
-    # 3. Idempotency — GitHub retries on timeout/5xx, so dedupe before enqueue.
-    if await already_seen(delivery_guid):
-        logger.info("duplicate delivery ignored: %s", delivery_guid)
-        return JSONResponse({"status": "duplicate"}, status_code=200)
-
-    # 4. Enqueue, and release the dedupe claim if that fails. already_seen is a SET NX
-    #    that marks the GUID handled; if the enqueue then dies, the job exists nowhere
-    #    and GitHub's retry of the same delivery would be answered
-    #    200 {"status":"duplicate"} — the PR silently never analysed. Releasing the key
-    #    turns a lost delivery into a retried one. Worst case on a failed release is a
-    #    duplicate scan, which the pipeline already tolerates; a dropped PR it does not.
+    # 3/4. Idempotency + enqueue. Two failure classes, two honest answers:
+    #   - Redis is down → 503, GitHub retries later, the worker backs off and
+    #     drains the queue once Redis returns (never a 500 traceback).
+    #   - any other enqueue failure → release the dedupe claim so the delivery is
+    #     retried instead of silently swallowed (the job exists nowhere).
     try:
+        if await already_seen(delivery_guid):
+            logger.info("duplicate delivery ignored: %s", delivery_guid)
+            return JSONResponse({"status": "duplicate"}, status_code=200)
         await enqueue_webhook_delivery(delivery_guid, event, payload)
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError):
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook processing unavailable (Redis not reachable).",
+        )
     except Exception:
         await release_delivery(delivery_guid)
         raise

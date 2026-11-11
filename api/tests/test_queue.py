@@ -1,10 +1,15 @@
-"""Reliable-queue pattern: reserve_job moves a job into its processing list
-atomically, ack_job removes it once handled, and recover_orphaned_jobs puts
-anything left in a processing list (a crash before ack) back on its source
-queue — a job is never lost between being popped and being fully handled."""
+"""Queue tests: soft-dependency helpers (ping/reset) + the reliable-queue pattern.
+
+Redis is a soft dependency — ping_redis never raises and reset_redis_client
+rebuilds a stale client. The reliable-queue half pins reserve_job/ack_job/
+recover_orphaned_jobs: a job is never lost between being popped and being fully
+handled.
+"""
 
 import pytest
+import redis
 
+from app import queue
 from app import queue as queue_mod
 from app.queue import (
     QUEUE_PAIRS,
@@ -14,6 +19,42 @@ from app.queue import (
     reserve_job,
     recover_orphaned_jobs,
 )
+
+
+class _RaisingRedis:
+    async def ping(self):
+        raise redis.exceptions.ConnectionError("redis down")
+
+
+class _OkRedis:
+    async def ping(self):
+        return True
+
+
+@pytest.mark.asyncio
+async def test_ping_redis_false_when_client_raises(monkeypatch):
+    """Mutation (2026-11-11): drop the `except Exception` in ping_redis -> the
+    ConnectionError escapes to the caller. With it, we get a clean False."""
+    monkeypatch.setattr(queue, "get_redis", lambda: _RaisingRedis())
+    assert await queue.ping_redis() is False
+
+
+@pytest.mark.asyncio
+async def test_ping_redis_true_when_client_responds(monkeypatch):
+    monkeypatch.setattr(queue, "get_redis", lambda: _OkRedis())
+    assert await queue.ping_redis() is True
+
+
+def test_reset_redis_client_drops_cached_client():
+    """Mutation (2026-11-11): make reset_redis_client a no-op -> the stale cached
+    client survives and this test fails."""
+    saved = queue._redis
+    queue._redis = object()
+    try:
+        queue.reset_redis_client()
+        assert queue._redis is None
+    finally:
+        queue._redis = saved
 
 
 class _FakeListRedis:
