@@ -86,3 +86,7 @@ web/tsconfig.tsbuildinfo
 run_api.bat
 run_web.bat
 run_worker.bat
+
+# kee-preflight working trees and reports — transient review tooling, never source.
+.worktrees/
+.cache/
