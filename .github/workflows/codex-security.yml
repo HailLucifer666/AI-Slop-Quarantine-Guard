@@ -1,0 +1,71 @@
+name: Codex Security scan (advisory)
+
+# Independent of the Guard's deterministic Check-Run gate (see ci.yml / api/app).
+# codex-security is an LLM-driven scanner — its findings are AI-generated hypotheses,
+# NOT reproducible facts, and must never feed api/app/analyzers or checks.py.
+# This job is advisory-only: workflow_dispatch only, never a required check, never
+# blocks a PR. (Pattern and firewall copied from strix.yml.)
+
+on:
+  workflow_dispatch: {}
+
+# Manual scans can be re-run; don't pile up concurrent LLM-driven scans burning
+# the operator's API budget.
+concurrency:
+  group: codex-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codex-security-scan:
+    runs-on: ubuntu-latest
+    # Skip cleanly instead of running a command guaranteed to fail on missing
+    # credentials (same pattern as strix.yml's fork-PR guard).
+    if: ${{ secrets.CODEX_SECURITY_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The vendor requires Node 22.13+ within 22.x (or 24.x/26.x). Don't assume
+      # the runner's default Node satisfies that — pin it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Version pinned 2026-11-11 (latest at pin time: 0.9.1). Re-verify before
+      # bumping — 0.x churns, and dependabot cannot see a version hard-coded
+      # inside a run step. Same re-verify-when-stale rule as
+      # api/tests/proof_ground_truth.py (VERIFIED_ON).
+      - name: Install codex-security CLI
+        run: npm install --global @openai/codex-security@0.9.1
+
+      # Auth: the CLI reads OPENAI_API_KEY (auto-precedence: OPENAI_API_KEY, then
+      # CODEX_API_KEY, then stored credentials). CODEX_SECURITY_API_KEY is this
+      # repo secret's *name* — chosen to be self-documenting and collision-free —
+      # mapped to the env var the vendor documents for CI.
+      - name: Run scan (non-interactive)
+        env:
+          OPENAI_API_KEY: ${{ secrets.CODEX_SECURITY_API_KEY }}
+        run: cs scan . --json > codex-security-findings.json
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-security-findings
+          path: codex-security-findings.json
+          retention-days: 14
+
+      # A link to the raw output rather than an in-line findings summary — same
+      # reasoning as strix.yml: don't fabricate a summary of what an LLM scanner
+      # found; let the raw artifact speak.
+      - name: Summarize with a link to the findings artifact
+        if: always()
+        run: |
+          {
+            echo '### 🤖 codex-security scan — advisory, not a Guard fact'
+            echo ''
+            echo 'An LLM-driven scanner ran against this ref (manual dispatch). These are'
+            echo "AI-generated hypotheses, not verified facts — they never block anything and"
+            echo "never change the Guard's check-run conclusion."
+            echo ''
+            echo "Findings are attached as a workflow artifact: [run #${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+          } >> "$GITHUB_STEP_SUMMARY"

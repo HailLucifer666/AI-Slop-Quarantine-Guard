@@ -73,6 +73,7 @@ Once the Guard reports its findings, Claude Haiku reads them and explains each o
 - **Want to deploy to production?** → `DEPLOYMENT.md`
 - **Want to see the build plan?** → `ROADMAP.md`
 - **Want to understand the big decisions?** → `DECISIONS.md`
+- **Want to contribute?** → `../CONTRIBUTING.md`
 
 ## Why This Matters
 
