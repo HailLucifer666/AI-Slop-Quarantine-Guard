@@ -21,12 +21,18 @@ export function CommandDock({ onPalette, live = true }: { onPalette?: () => void
   return (
     <header className="relative shrink-0">
       <div className="wall-hairline" />
-      <div className="flex items-center justify-between gap-3 px-4 py-2 md:px-6">
-        <Link href="/dashboard" className="wall-focus flex items-center gap-2.5" aria-label="Command wall">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md" style={{ background: "linear-gradient(135deg, var(--wall-magenta), var(--wall-violet) 50%, var(--wall-cyan))" }}>
-            <ShieldCheck className="h-4 w-4" style={{ color: "#04060c" }} aria-hidden />
+      <div className="flex items-center justify-between gap-3 px-4 py-0.5 md:px-6">
+        <Link href="/dashboard" className="wall-focus flex items-center gap-2.5 py-1" aria-label="Command wall">
+          <span
+            className="flex h-7 w-7 items-center justify-center rounded-md"
+            style={{ background: "var(--brand-gradient)" }}
+          >
+            <ShieldCheck className="h-4 w-4" style={{ color: "var(--on-accent)" }} aria-hidden />
           </span>
-          <span className="hidden font-display text-sm font-bold uppercase tracking-wide sm:inline" style={{ color: "var(--wall-text)" }}>
+          <span
+            className="hidden font-display text-sm font-bold uppercase tracking-wide sm:inline"
+            style={{ color: "var(--text)" }}
+          >
             Command Wall
           </span>
         </Link>
@@ -39,8 +45,12 @@ export function CommandDock({ onPalette, live = true }: { onPalette?: () => void
                 key={t.href}
                 href={t.href}
                 aria-current={on ? "page" : undefined}
-                className="wall-focus flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] transition-colors md:gap-2 md:px-3 md:text-sm"
-                style={{ color: on ? "var(--wall-text)" : "var(--wall-muted)", background: on ? "var(--wall-line)" : "transparent" }}
+                className="wall-focus flex min-h-[44px] items-center gap-1.5 rounded-md border px-3 text-sm transition-colors md:gap-2"
+                style={{
+                  color: on ? "var(--text)" : "var(--text-muted)",
+                  background: on ? "rgba(255,255,255,0.06)" : "transparent",
+                  borderColor: on ? "var(--line-strong)" : "transparent",
+                }}
               >
                 <t.icon className="h-4 w-4" aria-hidden />
                 <span>{t.label}</span>
@@ -49,14 +59,25 @@ export function CommandDock({ onPalette, live = true }: { onPalette?: () => void
           })}
         </nav>
 
-        <div className="flex items-center gap-3 text-[11px]" style={{ color: "var(--wall-faint)" }}>
+        <div className="flex items-center gap-3 text-xs" style={{ color: "var(--text-faint)" }}>
           {onPalette && (
-            <button onClick={onPalette} className="wall-focus hidden items-center gap-1 rounded-md px-2 py-1 sm:flex" style={{ border: "1px solid var(--wall-line)" }} aria-label="Command palette">
-              <span className="wall-num">⌘K</span>
+            <button
+              onClick={onPalette}
+              className="wall-focus relative hidden items-center rounded-md px-2 py-1 sm:flex"
+              style={{ border: "1px solid var(--line)" }}
+              aria-label="Command palette"
+            >
+              {/* Pseudo-element extends the 28px visual to a 44px hit target. */}
+              <span className="absolute -inset-2" aria-hidden />
+              <span className="wall-num font-mono text-xs">⌘K</span>
             </button>
           )}
-          <span className="flex items-center gap-1.5 uppercase tracking-wide">
-            <span className={live ? "h-1.5 w-1.5 animate-pulse rounded-full" : "h-1.5 w-1.5 rounded-full"} style={{ background: live ? "var(--wall-green)" : "var(--wall-faint)" }} aria-hidden />
+          <span className="flex items-center gap-1.5">
+            <span
+              className={live ? "h-1.5 w-1.5 animate-pulse rounded-full" : "h-1.5 w-1.5 rounded-full"}
+              style={{ background: live ? "var(--accent-green)" : "var(--text-faint)" }}
+              aria-hidden
+            />
             {live ? "Live" : "Offline"}
           </span>
         </div>

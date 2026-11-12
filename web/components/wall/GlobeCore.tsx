@@ -1,34 +1,38 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame } from "@react-three/fiber"
+import type { ThreeEvent } from "@react-three/fiber"
 import * as THREE from "three"
 
-import type { GlobeNode, Sev } from "@/lib/useWallData"
+import { shortRef } from "@/lib/format"
+import type { GlobeNode, RecentTarget } from "@/lib/useWallData"
+import { SEV_HEX } from "./tokens"
 import { useReducedMotion } from "./useReducedMotion"
 
 /**
- * The live globe — a dark planet stippled with land dots sampled from a
- * public-domain NASA map, with great-circle arcs + volumetric beams driven by the
- * REAL scan stream. Nodes are placed deterministically (fibonacci) — abstract,
- * not geographic. Transparent canvas: it floats on the page starfield.
+ * The live globe — a dark planet stippled with land dots sampled from a public-
+ * domain NASA map. Principle (spec §6): earth = decorative brand backdrop; every
+ * data layer on top is REAL — one orbit ring per recent scan (thickness ∝ files
+ * scanned, color = status, click → /analyses/{id}), finding bursts sized by the
+ * real findings count. The old point-to-point "traffic" arcs implied geography
+ * scans don't have and are retired. Transparent canvas: floats on the starfield.
  */
 const R = 1
 const EARTH_URL = "/wall/earth-map.jpg"
 
-const C = {
+/* Decorative brand backdrop — NOT data. These hues are identity (neon ramp);
+ * every data color comes from tokens.ts SEV_HEX or the two constants below. */
+const DECOR = {
   land: new THREE.Color("#6a5cf2"),
   cityCyan: new THREE.Color("#22e8e8"),
   cityMagenta: new THREE.Color("#ff3d8b"),
   atmosphere: new THREE.Color("#2b86ff"),
-  arcDot: new THREE.Color("#22e8e8"),
 }
-const SEV_HEX: Record<Sev, string> = {
-  certain: "#ff3b5c",
-  high: "#ff8a3d",
-  medium: "#ffc83d",
-  clean: "#22e8e8",
-}
+// Live-state ring color (queued | running) — the accent-cyan token value.
+const LIVE_HEX = "#16e0e0"
+// Failed-scan ring color — the act-failed / sev-certain token value.
+const FAILED_HEX = "#ff3b5c"
 
 function fibPoint(i: number, n: number, radius = R): THREE.Vector3 {
   const k = i + 0.5
@@ -92,9 +96,9 @@ function useEarthPoints(): THREE.BufferGeometry | null {
         pos.push(p.x, p.y, p.z)
         // Mostly luminous purple land, with sparser cyan/magenta "city" clusters.
         const roll = ((i * 9301 + 49297) % 233280) / 233280
-        if (roll > 0.92) tmp.copy(C.cityMagenta)
-        else if (roll > 0.8) tmp.copy(C.cityCyan)
-        else tmp.copy(C.land).multiplyScalar(1.05 + roll * 0.55)
+        if (roll > 0.92) tmp.copy(DECOR.cityMagenta)
+        else if (roll > 0.8) tmp.copy(DECOR.cityCyan)
+        else tmp.copy(DECOR.land).multiplyScalar(1.05 + roll * 0.55)
         col.push(tmp.r, tmp.g, tmp.b)
       }
       earthPointsCache = { pos: new Float32Array(pos), col: new Float32Array(col) }
@@ -109,22 +113,73 @@ function useEarthPoints(): THREE.BufferGeometry | null {
   return geom
 }
 
-function Scene({ nodes, spin }: { nodes: GlobeNode[]; spin: boolean }) {
+/* ---- Data orbit rings (spec §6.1) — one per recent scan --------------------- */
+
+function ringColor(t: RecentTarget): string {
+  if (t.status === "completed") return t.clean ? SEV_HEX.clean : SEV_HEX[t.sev]
+  if (t.status === "failed") return FAILED_HEX
+  return LIVE_HEX
+}
+
+function buildRing(i: number, t: RecentTarget): { mesh: THREE.Mesh; proxy: THREE.Mesh } {
+  const radius = 1.06 + i * 0.02 // newest innermost
+  // Thickness ∝ files actually scanned (0.004–0.012 globe units).
+  const tube = 0.004 + 0.008 * Math.min(1, Math.max(0, t.filesScanned) / 5000)
+  // Deterministic per-index tilt — stable across polls so rings don't jump when
+  // the recent list shifts.
+  const tilt = new THREE.Euler(0.35 + i * 0.09, i * 0.45, 0.12 * i - 0.3)
+  const pts: THREE.Vector3[] = []
+  for (let s = 0; s <= 128; s++) {
+    const a = (s / 128) * Math.PI * 2
+    pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0))
+  }
+  const curve = new THREE.CatmullRomCurve3(pts, true)
+  const mesh = new THREE.Mesh(
+    new THREE.TubeGeometry(curve, 128, tube, 8, true),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(ringColor(t)), transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }),
+  )
+  mesh.rotation.copy(tilt)
+  // Invisible raycast proxy (×3 radius, opacity 0) — the click/hover target.
+  const proxy = new THREE.Mesh(
+    new THREE.TubeGeometry(curve, 64, tube * 3, 8, true),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+  )
+  proxy.rotation.copy(tilt)
+  return { mesh, proxy }
+}
+
+interface SceneProps {
+  nodes: GlobeNode[]
+  targets: RecentTarget[]
+  spin: boolean
+  onHover: (idx: number | null, x: number, y: number) => void
+  onOpenScan: (id: number) => void
+}
+
+function Scene({ nodes, targets, spin, onHover, onOpenScan }: SceneProps) {
   const rootRef = useRef<THREE.Group>(null)
   const earthGeom = useEarthPoints()
+  const [hovered, setHovered] = useState<number | null>(null)
 
   const built = useMemo(() => {
+    // Finding bursts — completed scans ONLY (no invented mid-scan counts); the
+    // nodes list is derived from completed scans, sized by real finding counts.
     const recent = nodes.slice(-20)
     const n = Math.max(recent.length, 8)
     const pts = recent.map((node, i) => ({ node, pos: fibPoint(i, n, R * 1.01) }))
 
-    const markers = pts.map((p) => ({ pos: p.pos, color: new THREE.Color(SEV_HEX[p.node.sev]) }))
+    const markers = pts.map((p) => ({
+      pos: p.pos,
+      color: new THREE.Color(SEV_HEX[p.node.sev]),
+      size: 0.014 + Math.min(0.03, Math.sqrt(Math.max(0, p.node.weight)) * 0.004),
+    }))
 
-    // Short radial glow spikes — clustered at active points, not long rods.
+    // Radial glow spikes, honestly sized: length from the REAL findings count
+    // (clean scans keep the 0.06 nub — sqrt(0) = 0).
     const up = new THREE.Vector3(0, 1, 0)
     const beams = pts.map((p) => {
       const dir = p.pos.clone().normalize()
-      const len = p.node.sev === "clean" ? 0.07 : 0.12 + Math.min(0.18, p.node.weight * 0.02)
+      const len = 0.06 + Math.min(0.22, Math.sqrt(Math.max(0, p.node.weight)) * 0.035)
       const mid = dir.clone().multiplyScalar(R * 1.01 + len / 2)
       const geo = new THREE.CylinderGeometry(0.0015, 0.006, len, 6, 1, true)
       const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(SEV_HEX[p.node.sev]), transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
@@ -134,41 +189,7 @@ function Scene({ nodes, spin }: { nodes: GlobeNode[]; spin: boolean }) {
       return mesh
     })
 
-    // Great-circle arcs: slerp from A to B along the surface, lifted by a sine
-    // profile so they bow above it and land back down — both ends pinned, never
-    // crossing through the centre. (A raised-midpoint bezier degenerates to a
-    // straight chord when the two points are near-antipodal.)
-    const arcDotMat = new THREE.MeshBasicMaterial({ color: C.arcDot, transparent: true, blending: THREE.AdditiveBlending })
-    const arcs: { line: THREE.Line; curve: THREE.CatmullRomCurve3; dot: THREE.Mesh }[] = []
-    const SEGS = 48
-    for (let i = 1; i < pts.length; i++) {
-      const da = pts[i - 1].pos.clone().normalize()
-      const db = pts[i].pos.clone().normalize()
-      const ang = da.angleTo(db)
-      if (ang < 0.05) continue // coincident — nothing to connect
-      const sinAng = Math.sin(ang)
-      const frac = ang / Math.PI // 0 (near) → 1 (antipodal)
-      const lift = 0.22 + 0.45 * frac
-      const arcPts: THREE.Vector3[] = []
-      for (let s = 0; s <= SEGS; s++) {
-        const t = s / SEGS
-        const w1 = Math.sin((1 - t) * ang) / sinAng
-        const w2 = Math.sin(t * ang) / sinAng
-        const dir = da.clone().multiplyScalar(w1).add(db.clone().multiplyScalar(w2)).normalize()
-        const h = R * 1.01 + Math.sin(Math.PI * t) * lift
-        arcPts.push(dir.multiplyScalar(h))
-      }
-      const curve = new THREE.CatmullRomCurve3(arcPts)
-      const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(arcPts),
-        new THREE.LineBasicMaterial({ color: new THREE.Color(SEV_HEX[pts[i].node.sev]), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending }),
-      )
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.013, 8, 8), arcDotMat)
-      dot.position.copy(arcPts[0])
-      arcs.push({ line, curve, dot })
-    }
-
-    // Ambient orbital great-circle rings (static, for the layered-depth look).
+    // Three ambient decorative rings (brand backdrop — opacity ≤ 0.16, not data).
     const RING_DEFS = [
       { tilt: new THREE.Euler(1.15, 0.2, 0.3), radius: R * 1.07, color: "#22e8e8", op: 0.16 },
       { tilt: new THREE.Euler(0.4, 1.2, -0.5), radius: R * 1.14, color: "#6a5cf2", op: 0.13 },
@@ -188,28 +209,41 @@ function Scene({ nodes, spin }: { nodes: GlobeNode[]; spin: boolean }) {
       return line
     })
 
-    return { markers, beams, arcs, arcDotMat, rings }
-  }, [nodes])
+    // Data orbit rings — one per recent scan (≤ 8), replacing the retired arcs.
+    const dataRings = targets.map((t, i) => {
+      const { mesh, proxy } = buildRing(i, t)
+      return { id: t.id, mesh, proxy, live: t.status === "queued" || t.status === "running" }
+    })
+
+    return { markers, beams, rings, dataRings }
+  }, [nodes, targets])
 
   useEffect(() => {
     return () => {
-      for (const a of built.arcs) { a.line.geometry.dispose(); (a.line.material as THREE.Material).dispose(); a.dot.geometry.dispose() }
-      built.arcDotMat.dispose()
       for (const b of built.beams) { b.geometry.dispose(); (b.material as THREE.Material).dispose() }
       for (const r of built.rings) { r.geometry.dispose(); (r.material as THREE.Material).dispose() }
+      for (const d of built.dataRings) {
+        d.mesh.geometry.dispose(); (d.mesh.material as THREE.Material).dispose()
+        d.proxy.geometry.dispose(); (d.proxy.material as THREE.Material).dispose()
+      }
     }
   }, [built])
+
+  useEffect(() => () => { document.body.style.cursor = "" }, [])
 
   const tRef = useRef(0)
   useFrame((_, delta) => {
     if (rootRef.current && spin) rootRef.current.rotation.y += delta * 0.05
     tRef.current = (tRef.current + delta * 0.25) % 1
-    for (let i = 0; i < built.arcs.length; i++) {
-      const local = (tRef.current + i / Math.max(1, built.arcs.length)) % 1
-      built.arcs[i].curve.getPoint(local, built.arcs[i].dot.position)
-    }
     const pulse = 0.6 + 0.4 * Math.sin(tRef.current * Math.PI * 2)
     for (const b of built.beams) (b.material as THREE.MeshBasicMaterial).opacity = pulse
+    // Ring opacity: hover 0.9 · queued/running pulse (0.35–0.6) · finished 0.45.
+    built.dataRings.forEach((d, i) => {
+      const m = d.mesh.material as THREE.MeshBasicMaterial
+      if (hovered === i) m.opacity = 0.9
+      else if (d.live) m.opacity = 0.35 + 0.25 * Math.sin(tRef.current * Math.PI * 2)
+      else m.opacity = 0.45
+    })
   })
 
   return (
@@ -220,7 +254,7 @@ function Scene({ nodes, spin }: { nodes: GlobeNode[]; spin: boolean }) {
       </mesh>
       <mesh>
         <sphereGeometry args={[R * 1.2, 48, 48]} />
-        <meshBasicMaterial color={C.atmosphere} transparent opacity={0.12} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
+        <meshBasicMaterial color={DECOR.atmosphere} transparent opacity={0.12} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
       </mesh>
 
       {earthGeom && (
@@ -231,45 +265,81 @@ function Scene({ nodes, spin }: { nodes: GlobeNode[]; spin: boolean }) {
 
       {built.rings.map((r, i) => <primitive key={`r${i}`} object={r} />)}
 
+      {built.dataRings.map((d, i) => (
+        <group key={`dr${d.id}`}>
+          <primitive object={d.mesh} />
+          <primitive
+            object={d.proxy}
+            onPointerOver={(e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHovered(i); onHover(i, e.clientX, e.clientY); document.body.style.cursor = "pointer" }}
+            onPointerMove={(e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); onHover(i, e.clientX, e.clientY) }}
+            onPointerOut={() => { setHovered(null); onHover(null, 0, 0); document.body.style.cursor = "" }}
+            onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); onOpenScan(d.id) }}
+          />
+        </group>
+      ))}
+
       {built.markers.map((m, i) => (
         <mesh key={`m${i}`} position={m.pos}>
-          <sphereGeometry args={[0.018, 8, 8]} />
+          <sphereGeometry args={[m.size, 8, 8]} />
           <meshBasicMaterial color={m.color} transparent blending={THREE.AdditiveBlending} />
         </mesh>
       ))}
 
       {built.beams.map((b, i) => <primitive key={`b${i}`} object={b} />)}
-
-      {built.arcs.map((a, i) => (
-        <group key={`a${i}`}>
-          <primitive object={a.line} />
-          <primitive object={a.dot} />
-        </group>
-      ))}
     </group>
   )
 }
 
-export default function GlobeCore({ nodes, paused = false }: { nodes: GlobeNode[]; paused?: boolean }) {
+export default function GlobeCore({
+  nodes,
+  targets,
+  paused = false,
+  onOpenScan,
+}: {
+  nodes: GlobeNode[]
+  targets: RecentTarget[]
+  paused?: boolean
+  onOpenScan: (id: number) => void
+}) {
   const reduced = useReducedMotion()
   const [hidden, setHidden] = useState(false)
+  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
   useEffect(() => {
     const on = () => setHidden(document.hidden)
     document.addEventListener("visibilitychange", on)
     return () => document.removeEventListener("visibilitychange", on)
   }, [])
   const spin = !paused && !reduced && !hidden
+
+  const handleHover = useCallback(
+    (idx: number | null, x: number, y: number) => {
+      if (idx == null) { setTip(null); return }
+      const t = targets[idx]
+      if (!t) { setTip(null); return }
+      setTip({
+        x, y,
+        text: `scan/${t.id} · ${shortRef(t.ref)} · ${t.status} · ${t.filesScanned} files · ${t.findings} findings`,
+      })
+    },
+    [targets],
+  )
+
   return (
-    <div className="h-full w-full">
+    <div className="relative h-full w-full" aria-hidden>
       <Canvas
         dpr={[1, 2]}
         camera={{ position: [0, 0, 3.15], fov: 40 }}
         frameloop={spin ? "always" : "demand"}
         gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
-        aria-label="Live globe of scan activity"
+        onPointerMissed={() => setTip(null)}
       >
-        <Scene nodes={nodes} spin={spin} />
+        <Scene nodes={nodes} targets={targets} spin={spin} onHover={handleHover} onOpenScan={onOpenScan} />
       </Canvas>
+      {tip && (
+        <div className="wall-tooltip" style={{ left: tip.x + 12, top: tip.y + 12 }}>
+          {tip.text}
+        </div>
+      )}
     </div>
   )
 }

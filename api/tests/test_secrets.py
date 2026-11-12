@@ -434,3 +434,99 @@ async def test_real_looking_secret_in_app_code_still_advisory():
     assert len(findings) == 1
     assert findings[0].confidence is Confidence.HIGH
     assert findings[0].block_eligible is False
+
+
+# --- fixture/synthetic downgrades (scan #20: openai/codex-security) ---------
+
+# Probes (2026-11-12, run and restored): ``_token_carries_marker`` → ``return
+# False`` reded exactly test_marker_word_inside_token_value_downgraded while the
+# surrounding-text steering control stayed green — the check is value-specific.
+# Adding "synthetic" to the ±20-char window _ALLOWLIST was deliberately NOT done
+# for the same reason; the generic-tier word lives in _NONSESECRET_WORDS, which
+# only ever reads the captured value.
+
+_SYNTHETIC_TOKEN = "github_pat_SYNTHETIC_GITHUB_PAT_123"
+_REAL_SHAPED_TOKEN = "github_pat_QWERTYUIOPASDFGHJKLZXCVBNM1234"
+
+
+@pytest.mark.asyncio
+async def test_marker_word_inside_token_value_downgraded():
+    # The token ITSELF announces it is fake — the value-internal check downgrades it
+    # without needing the path (scan #20 finding 2 fired CERTAIN on exactly this).
+    diff = _diff("src/lib.ts", [f'const t = "{_SYNTHETIC_TOKEN}";'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+    assert "marker" in f.message
+
+
+@pytest.mark.asyncio
+async def test_marker_word_only_in_surrounding_text_stays_certain():
+    # Steering guard: a marker word NEXT TO a real-shaped token must not suppress or
+    # downgrade it — an attacker can always add a comment. Suppression is
+    # value-internal only; the window allowlist gains no new vocabulary.
+    diff = _diff("src/lib.ts", [f'sendSynthetic(repo, "{_REAL_SHAPED_TOKEN}");'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.CERTAIN
+    assert f.block_eligible is True
+
+
+@pytest.mark.asyncio
+async def test_tests_ts_dash_suffixed_path_downgraded():
+    # scan #20 finding 2's path: 'tests-ts' is not a whole segment, the old regex
+    # missed it and the fixture token blocked. Real-shaped token isolates the PATH fix.
+    diff = _diff("sdk/typescript/tests-ts/cli-fixtures.ts", [f'const t = "{_REAL_SHAPED_TOKEN}";'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+    assert "test/fixture path" in f.message
+
+
+@pytest.mark.asyncio
+async def test_evals_path_downgraded():
+    # 'evals' was absent from the old vocabulary entirely (scan #20 finding 3's path).
+    diff = _diff("evals/secret-discovery/test_runtime.mts", [f'const t = "{_REAL_SHAPED_TOKEN}";'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_mid_segment_fixture_filename_downgraded():
+    # 'fixtures' buried mid-segment in a filename (cli-fixtures.ts) still counts when
+    # delimited — the old segment-exact regex required the token to own the segment.
+    diff = _diff("tools/cli-fixtures.ts", [f'const t = "{_REAL_SHAPED_TOKEN}";'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_real_token_in_tests_dir_still_surfaces_high():
+    # Pin the pre-existing contract: a real-shaped token in a test path is SURFACED
+    # (advisory), never silently dropped — a real leak does land in test folders.
+    diff = _diff("tests/auth.test.ts", [f'const t = "{_REAL_SHAPED_TOKEN}";'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_synthetic_generic_value_not_flagged():
+    # scan #20 finding 3's family: 'synthetic' in the VALUE of a generic
+    # credential-named assignment is not a credential. High-entropy shape on
+    # purpose — the low-entropy guard alone already skips meek values, and this
+    # test must fail on the word's absence, not coast on an existing guard
+    # (probed 2026-11-12: "Synthetic-kX9pQ2vB7nR4mZ8w" surfaces HIGH before the fix).
+    diff = _diff("evals/secret-discovery/test_runtime.mts", ['openAiApiKey = "Synthetic-kX9pQ2vB7nR4mZ8w"'])
+    assert await check_secrets(diff, {}) == []

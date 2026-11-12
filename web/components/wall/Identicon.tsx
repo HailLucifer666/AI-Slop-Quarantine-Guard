@@ -27,7 +27,7 @@ export function Identicon({ seed, size = 26, className }: { seed: string; size?:
       width={size}
       height={size}
       className={className}
-      style={{ borderRadius: 7, background: "rgba(255,255,255,0.05)", flexShrink: 0 }}
+      style={{ borderRadius: 6, background: "rgba(255,255,255,0.05)", flexShrink: 0 }}
       aria-hidden
     >
       {cells.map(([x, y], i) => (

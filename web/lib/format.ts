@@ -14,9 +14,9 @@ export function formatNumber(n: number | null | undefined): string {
   return n.toLocaleString("en-US")
 }
 
-export function formatRelativeTime(iso: string | null | undefined): string {
-  if (!iso) return "—"
-  const then = new Date(iso).getTime()
+export function formatRelativeTime(iso: string | number | null | undefined): string {
+  if (iso == null || iso === "") return "—"
+  const then = typeof iso === "number" ? iso : new Date(iso).getTime()
   if (Number.isNaN(then)) return "—"
   const diff = Date.now() - then
   const sec = Math.round(diff / 1000)

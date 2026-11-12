@@ -1,6 +1,7 @@
 """Test manifest parsers: real names extracted, local/git/url refs filtered out."""
 
 from app.manifests import (
+    collect_workspace_names,
     extract_dependency_names,
     extract_pinned_lockfile,
     lockfile_ecosystem,
@@ -234,3 +235,46 @@ def test_malformed_lockfile_is_silent():
     assert extract_pinned_lockfile("package-lock.json", "{ not json") == []
     assert extract_pinned_lockfile("Cargo.lock", "= = =") == []
     assert extract_pinned_lockfile("unknown.lock", "whatever") == []
+
+
+# --- collect_workspace_names (SQG001 workspace-internal downgrade) ----------
+# Its load-bearing proof runs through the SQG001 consumer: probe 2026-11-12
+# disabled the diff-manifest union in dependencies.py and exactly
+# test_dependencies.py::test_manifest_declared_name_downgraded_from_diff_manifests
+# went red, then the code was restored.
+
+def test_collect_workspace_names_from_package_json():
+    files = {
+        "app/package.json": '{"name": "app"}',
+        "packages/helper/package.json": '{"name": "helper"}',
+    }
+    assert collect_workspace_names(files) == {"npm": {"app", "helper"}}
+
+
+def test_collect_workspace_names_from_pyproject_is_pypi_normalized():
+    # PEP 503: the registry normalizes case and [-_.] runs, so the stored name must
+    # too — a dependency spelled `my-lib` against a declared `my_lib` is the same
+    # package (review finding, 2026-11-12).
+    files = {"pyproject.toml": '[project]\nname = "my_lib"\n'}
+    assert collect_workspace_names(files) == {"pypi": {"my-lib"}}
+
+
+def test_collect_workspace_names_skips_fixture_manifests():
+    # A fixture manifest's declared name must not legitimize a production-path 404
+    # of that name (review finding, 2026-11-12) — the fixture rung carries it.
+    files = {"tests/fixtures/demo/package.json": '{"name": "helper"}'}
+    assert collect_workspace_names(files) == {}
+
+
+def test_collect_workspace_names_skips_malformed_and_non_manifests():
+    # One broken manifest must not void the set; non-manifest files carry no
+    # declared names; pnpm-workspace.yaml globs point only at directories that
+    # carry their own package.json — whose names are collected directly — so
+    # globs contribute nothing to the set by construction.
+    files = {
+        "app/package.json": "{not json",
+        "pyproject.toml": "not [ toml",
+        "lib/math.ts": 'const name = "decoy"',
+        "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n",
+    }
+    assert collect_workspace_names(files) == {}

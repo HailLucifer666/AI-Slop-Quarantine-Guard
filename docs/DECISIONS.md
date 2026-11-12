@@ -519,6 +519,28 @@ Every major choice is tracked here with context + rationale. Future decisions bu
 
 ---
 
+## ADR-024: Fixture and Workspace-Internal Findings Downgrade, Never Silence
+
+**Date:** 2026-11-12  
+**Status:** ACCEPTED
+
+**Context:**  
+Scan #20 (openai/codex-security) produced two CERTAIN / block-eligible findings on the repo's own test fixtures: a leaked-token alarm on the literal string `github_pat_SYNTHETIC_GITHUB_PAT_123`, and a hallucinated-package alarm on `evals/triage-finding/fixtures/repo/package.json` — a fixture built to contain a fake package. Blocking on either would have broken the never-false-block promise (ADR-023's principle applied across detectors).
+
+**Decision:**  
+Downgrades are detector-side, derived, and layered — most-specific intent signal first, every rung surfaced as advisory, never silently dropped:
+1. **Value-internal markers** (SQG002): a distinctive token whose own value carries a fake-marker word (`synthetic`, `not-a-real`, `not_real`) downgrades on every path. The ±20-char window allowlist deliberately gains no vocabulary — a marker word *next to* a real token is attacker-controlled and must not suppress it.
+2. **Shared test-path classifier** (`analyzers/paths.py`, one constant for SQG001 + SQG002): segment-delimited test tokens (`tests-ts/`, `cli-fixtures.ts`, `evals/`, `__snapshots__/`, `cypress/` included); boundary rules pin that `contest.py`, `latest.md`, `testutils/`, `prospects/` never match.
+3. **Workspace-internal names** (SQG001): a public-registry 404 for a name the repo itself declares (manifest `name` fields, **per ecosystem** — an npm declaration answers npm questions only; **PEP 503-normalized** for PyPI so `my_lib` and `my-lib` match) is a workspace-internal package, advisory only. Whole-tree collection in scan mode, diff-touched manifests in PR mode. `private: true` is deliberately NOT a signal — nearly every application manifest sets it, and their dependencies still come from the registry; the derived signal is "declared by this repo". **Fixture manifests are excluded from collection** — a fixture-declared name must not legitimize a production-path 404 (the fixture rung carries that case alone).
+
+**Accepted tradeoff (steering).** An author chooses file paths, so naming a folder `evals/` or `fixtures/` can steer SQG001's fixture-path downgrade and hide a would-be blocker. Accepted for the dependency case because the alternative is blocking on fixtures, and because the workspace-name and private-index rungs still require repo-declared evidence. For secrets the tradeoff is narrower: test paths only downgrade to advisory (still surfaced), and value-internal markers cannot be added by path naming.
+
+**Known limit (recorded, not fixed):** the detector validates no token checksums (prefix+length regexes only; AWS AKIA is the only pattern with a public checksum algorithm), so a real leak in a test folder surfaces as HIGH advisory rather than CERTAIN. Real leaks do land in test folders — they are surfaced, never silenced.
+
+**Residual classes of the path classifier (probed 2026-11-12, accepted, not fixed):** ordinary production directories whose names contain delimited test tokens are downgraded too — `src/ab-test/`, `src/ab_tests/` (A/B-testing features), `migrations/002_add_tests_table.py`, `api/e2e-monitor/` (production monitoring), `src/patent-samples/`. Same tradeoff as path steering, but these are names nobody chose in order to steer — the cost is advisory-only downgrades, never silencing. Still-unmatched fixture carriers: digit-suffixed segments (`tests2/`) and CamelCase fixture holders (`TestConstants.kt`, `MockResponses.java`) where no delimiter precedes the token — Java/Kotlin repos are the most exposed; widening the vocabulary to those shapes is deferred until a real scan shows the miss.
+
+---
+
 ## ADR-025: SQG007 Established-Package Gate (Registry Age)
 
 **Date:** 2026-11-13  

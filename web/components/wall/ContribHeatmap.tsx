@@ -1,9 +1,13 @@
+"use client"
+
 import type { HeatCell } from "@/lib/useWallData"
 
 /**
- * Reference's "Contribution Graph" — last 13 weeks of scans as week-columns of
- * dots, intensity = scan count (4 buckets), exact count in the tooltip, faint
- * column axis ticks + Less→More legend. Transparent / card-less.
+ * Bottom-strip tile 3 (spec §5) — 13 weeks of scans as week-columns of dots,
+ * intensity = scan count (4 buckets), exact count in the tooltip, REAL date
+ * axis labels (first/middle/last cell), a permanent "{n} scans so far" caption
+ * (the 11-scan reality reads "small but alive", not broken), and an sr-only
+ * summary so the ramp is never the only data channel.
  */
 function chunkWeeks(cells: HeatCell[]): HeatCell[][] {
   const weeks: HeatCell[][] = []
@@ -20,21 +24,34 @@ function bucket(count: number, max: number): number {
 }
 const STEP_OPACITY = [0, 0.4, 0.7, 1]
 
-export function ContribHeatmap({ cells }: { cells: HeatCell[] }) {
+/** ISO day (yyyy-mm-dd) → "Aug 18". T00:00:00 pins the parse to local midnight
+ * (a bare date string parses as UTC and can shift a day west of GMT). */
+function dayLabel(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+export function ContribHeatmap({ cells, scanned }: { cells: HeatCell[]; scanned: number }) {
   const max = Math.max(1, ...cells.map((c) => c.count))
   const weeks = chunkWeeks(cells)
   const empty = cells.every((c) => c.count === 0)
-  // ~5 evenly spaced axis ticks.
-  const ticks = [1, 2, 3, 4, 5].map((n) => Math.round((n / 5) * weeks.length))
+  const total = cells.reduce((a, c) => a + c.count, 0)
+  const busiest = cells.reduce<HeatCell | null>((acc, c) => (acc == null || c.count > acc.count ? c : acc), null)
+  // Real axis: first, middle, and last cell of the 13-week window.
+  const axis = [cells[0], cells[Math.floor((cells.length - 1) / 2)], cells[cells.length - 1]]
 
   return (
     <div className="relative flex flex-col">
       <div className="flex items-center justify-between">
         <span className="wall-label">Contribution Graph</span>
-        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide" style={{ color: "var(--wall-faint)" }}>
+        <span className="flex items-center gap-1 text-xs" style={{ color: "var(--text-faint)" }}>
           Less
           {STEP_OPACITY.map((o, i) => (
-            <span key={i} className="h-2 w-2 rounded-[2px]" style={{ background: o === 0 ? "var(--wall-line)" : "var(--wall-green)", opacity: o === 0 ? 1 : o }} aria-hidden />
+            <span
+              key={i}
+              className="h-2 w-2 rounded-xs"
+              style={{ background: o === 0 ? "var(--line)" : "var(--accent-green)", opacity: o === 0 ? 1 : o }}
+              aria-hidden
+            />
           ))}
           More
         </span>
@@ -49,8 +66,8 @@ export function ContribHeatmap({ cells }: { cells: HeatCell[] }) {
                 <span
                   key={cell.day}
                   title={`${cell.day}: ${cell.count} scan${cell.count === 1 ? "" : "s"}`}
-                  className="h-2.5 w-2.5 rounded-[2px]"
-                  style={{ background: b === 0 ? "var(--wall-line)" : "var(--wall-green)", opacity: b === 0 ? 1 : STEP_OPACITY[b] }}
+                  className="h-2.5 w-2.5 rounded-xs"
+                  style={{ background: b === 0 ? "var(--line)" : "var(--accent-green)", opacity: b === 0 ? 1 : STEP_OPACITY[b] }}
                 />
               )
             })}
@@ -58,17 +75,23 @@ export function ContribHeatmap({ cells }: { cells: HeatCell[] }) {
         ))}
       </div>
 
-      <div className="mt-2 flex justify-between px-1 text-[10px]" style={{ color: "var(--wall-faint)" }}>
-        {ticks.map((_, i) => (
+      <div className="mt-2 flex justify-between px-1 text-xs" style={{ color: "var(--text-faint)" }}>
+        {axis.map((c, i) => (
           <span key={i} className="wall-num">
-            {i + 1}
+            {c ? dayLabel(c.day) : ""}
           </span>
         ))}
       </div>
+      <p className="wall-sub mt-1">{scanned} scans so far</p>
+      <p className="sr-only">
+        {total > 0 && busiest
+          ? `${total} scans across the last 13 weeks; busiest day ${dayLabel(busiest.day)} with ${busiest.count}.`
+          : "No scans in the last 13 weeks."}
+      </p>
 
       {empty && (
-        <span className="pointer-events-none absolute inset-x-0 top-1/2 text-center text-xs" style={{ color: "var(--wall-faint)" }}>
-          No scans recorded yet
+        <span className="wall-sub pointer-events-none absolute inset-x-0 top-1/2 text-center">
+          No scans in the last 13 weeks yet
         </span>
       )}
     </div>

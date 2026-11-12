@@ -5,13 +5,13 @@ import { useEffect, useRef } from "react"
 /**
  * Falling dot-matrix background — Matrix-style rain made of dots, not characters.
  * Columns of dots cascade downward with a fading trail (brightest at the head),
- * recoloured to Aurora teal + indigo. Plain 2D canvas (no WebGL/shader) so it
+ * recoloured to the merged neon tokens (cyan + violet). Plain 2D canvas (no WebGL/shader) so it
  * renders reliably as a global page backdrop. Honours prefers-reduced-motion
  * (renders nothing) and is purely decorative (aria-hidden, pointer-events-none).
  */
 
-const TEAL = "22,200,212"
-const INDIGO = "74,91,255"
+const TEAL = "22,224,224" // --accent-cyan (hex triple: canvas can't read CSS vars)
+const VIOLET = "139,92,246" // --accent-violet
 const CELL = 22 // px grid spacing between dots
 
 type Column = { y: number; speed: number; len: number; color: string }
@@ -21,7 +21,7 @@ function makeColumn(height: number, startAbove: boolean): Column {
     y: startAbove ? -Math.random() * height : Math.random() * height,
     speed: 45 + Math.random() * 95, // px per second
     len: 6 + Math.floor(Math.random() * 14), // dots in the trail
-    color: Math.random() < 0.5 ? TEAL : INDIGO,
+    color: Math.random() < 0.5 ? TEAL : VIOLET,
   }
 }
 

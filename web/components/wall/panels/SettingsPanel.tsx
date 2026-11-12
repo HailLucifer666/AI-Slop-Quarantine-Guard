@@ -37,8 +37,8 @@ export function SettingsPanel() {
     }
   }
 
-  if (error) return <p className="text-sm" style={{ color: "var(--wall-act-failed)" }}>{error}</p>
-  if (!s) return <p className="flex items-center gap-2 text-sm" style={{ color: "var(--wall-muted)" }}><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
+  if (error) return <p role="alert" className="text-sm" style={{ color: "var(--sev-certain)" }}>{error}</p>
+  if (!s) return <p className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
 
   const toggleRule = (id: string) => {
     const set = new Set(s.blocked_rules)
@@ -51,30 +51,30 @@ export function SettingsPanel() {
     <div className="max-w-2xl space-y-7">
       <section className="wall-card flex items-center justify-between p-5">
         <div>
-          <div className="font-display text-base font-semibold" style={{ color: "var(--wall-text)" }}>Block mode</div>
-          <p className="mt-1 text-sm" style={{ color: "var(--wall-muted)" }}>Saved preference only — enforcement ships in a later phase (the Guard stays advisory).</p>
+          <div className="font-display text-base font-semibold" style={{ color: "var(--text)" }}>Block mode</div>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>Saved preference only — enforcement ships in a later phase (the Guard stays advisory).</p>
         </div>
         <button
           role="switch"
           aria-checked={s.block_mode}
           onClick={() => patch({ block_mode: !s.block_mode })}
-          className="wall-focus relative h-6 w-11 shrink-0 rounded-full transition-colors"
-          style={{ background: s.block_mode ? "var(--wall-green)" : "var(--wall-line-strong)" }}
+          className="wall-focus relative h-6 w-11 shrink-0 rounded-full transition-colors after:absolute after:-inset-2.5 after:content-['']"
+          style={{ background: s.block_mode ? "var(--accent-green)" : "var(--line-strong)" }}
         >
           <span className="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all" style={{ left: s.block_mode ? 22 : 2 }} />
         </button>
       </section>
 
       <section className="wall-card p-5">
-        <div className="font-display text-base font-semibold" style={{ color: "var(--wall-text)" }}>Blocked rules</div>
-        <p className="mb-3 mt-1 text-sm" style={{ color: "var(--wall-muted)" }}>Which checks would block when enforcement is on.</p>
+        <div className="font-display text-base font-semibold" style={{ color: "var(--text)" }}>Blocked rules</div>
+        <p className="mb-3 mt-1 text-sm" style={{ color: "var(--text-muted)" }}>Which checks would block when enforcement is on.</p>
         <div className="grid gap-2 sm:grid-cols-2">
           {RULES.map((id) => {
             const on = s.blocked_rules.includes(id)
             return (
-              <button key={id} onClick={() => toggleRule(id)} title={CHECKS[id]?.blurb} className="wall-focus flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm" style={{ border: `1px solid ${on ? "var(--wall-cyan)" : "var(--wall-line)"}`, color: "var(--wall-text)" }}>
-                <span className="h-2 w-2 rounded-full" style={{ background: on ? "var(--wall-cyan)" : "var(--wall-line-strong)" }} aria-hidden />
-                <span className="font-mono text-xs" style={{ color: "var(--wall-faint)" }}>{id}</span>
+              <button key={id} onClick={() => toggleRule(id)} title={CHECKS[id]?.blurb} className="wall-focus flex min-h-[44px] items-center gap-2 rounded-md px-3 py-2 text-left text-sm" style={{ border: `1px solid ${on ? "var(--accent-cyan)" : "var(--line)"}`, color: "var(--text)" }}>
+                <span className="h-2 w-2 rounded-full" style={{ background: on ? "var(--accent-cyan)" : "var(--line-strong)" }} aria-hidden />
+                <span className="font-mono text-xs" style={{ color: "var(--text-faint)" }}>{id}</span>
                 <span className="truncate">{CHECKS[id]?.name}</span>
               </button>
             )
@@ -83,25 +83,25 @@ export function SettingsPanel() {
       </section>
 
       <section className="wall-card p-5">
-        <div className="font-display text-base font-semibold" style={{ color: "var(--wall-text)" }}>Retention</div>
+        <div className="font-display text-base font-semibold" style={{ color: "var(--text)" }}>Retention</div>
         {/* Previously claimed "Scans older than this are deleted automatically." Nothing in
             the codebase reads retention_days to delete anything, so that was a false promise
             about the user's own data. Worded like the block-mode note above until enforcement
             is actually built and opted into. */}
-        <p className="mb-3 mt-1 text-sm" style={{ color: "var(--wall-muted)" }}>
+        <p className="mb-3 mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
           Saved preference only — nothing is deleted yet. No scan has ever been removed
           automatically; deletion ships as an explicit opt-in.
         </p>
         <div className="flex gap-2">
           {RETENTION.map((d) => (
-            <button key={d} onClick={() => patch({ retention_days: d })} className="wall-focus rounded-md px-4 py-2 text-sm" style={{ border: `1px solid ${s.retention_days === d ? "var(--wall-cyan)" : "var(--wall-line)"}`, color: s.retention_days === d ? "var(--wall-text)" : "var(--wall-muted)" }}>
+            <button key={d} onClick={() => patch({ retention_days: d })} className="wall-focus inline-flex min-h-[44px] items-center rounded-md px-4 py-2 text-sm" style={{ border: `1px solid ${s.retention_days === d ? "var(--accent-cyan)" : "var(--line)"}`, color: s.retention_days === d ? "var(--text)" : "var(--text-muted)" }}>
               {d} days
             </button>
           ))}
         </div>
       </section>
 
-      <div className="text-xs" style={{ color: saved ? "var(--wall-green)" : "var(--wall-faint)" }}>
+      <div className="text-xs" style={{ color: saved ? "var(--accent-green)" : "var(--text-faint)" }}>
         {saving ? "Saving…" : saved ? "Saved." : "Changes save automatically."}
       </div>
     </div>
