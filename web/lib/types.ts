@@ -164,13 +164,15 @@ export interface Analytics {
 }
 
 /** Live phase progress while a scan runs (cleared on finish). Honest: real phase
- * index over the 6 analyzers, no invented %/ETA. */
+ * index over the analyzers, no invented %/ETA. The worker also emits pre-analyzer
+ * phases (cloning / reading) where total is 0 (indeterminate) and files_total is
+ * null until the file set is known. */
 export interface ScanProgress {
-  phase: string // dependencies | placeholders | secrets | vulnerabilities | sast | licenses | reporting
+  phase: string // cloning | reading | dependencies | placeholders | secrets | vulnerabilities | sast | licenses | typosquat | simplify | reporting
   index: number // 0..total
-  total: number // 6
+  total: number // 0 for the pre-analyzer phases
   findings_so_far: number
-  files_total: number
+  files_total: number | null
 }
 
 export interface ScanSummary {
@@ -193,6 +195,9 @@ export interface ScanSummary {
   created_at: string | null
   completed_at: string | null
   heartbeat_at: string | null
+  /** How many queued scans precede this one — set only while status is queued
+   * (0 = next up; a running scan is not queued and counts for nobody). */
+  queue_position?: number | null
   /** Provenance: exactly what was analyzed. A re-scan of unchanged code produces a NEW
    * id with a MATCHING content_hash — evidence of a fresh run, not a cached one. */
   resolved_sha: string | null

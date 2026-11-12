@@ -383,3 +383,38 @@ async def test_scan_start_returns_503_and_marks_failed_when_redis_down(api, monk
     scans = (await client.get("/api/scans")).json()["scans"]
     assert len(scans) == 1
     assert scans[0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_queued_scans_report_queue_position(api):
+    # Scans 21/22 both showed "Analysing" with no queue context: the dashboard could
+    # not say "you are #2 in line". The detail endpoint reports the position while
+    # queued (0 = next up; a RUNNING scan is not queued and counts nobody).
+    client, _ = api
+    first = (
+        await client.post("/api/scans", json={"source": "url", "url": "https://github.com/a/b"})
+    ).json()["scan_id"]
+    second = (
+        await client.post("/api/scans", json={"source": "url", "url": "https://github.com/c/d"})
+    ).json()["scan_id"]
+    assert (await client.get(f"/api/scans/{first}")).json()["queue_position"] == 0
+    assert (await client.get(f"/api/scans/{second}")).json()["queue_position"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_events_stream_carries_queue_position(api, monkeypatch):
+    # The SSE frame the dashboard could subscribe to must carry the position too.
+    client, _ = api
+    scan_id = (
+        await client.post("/api/scans", json={"source": "url", "url": "https://github.com/e/f"})
+    ).json()["scan_id"]
+    # A queued scan's stream never ends server-side, so cap its lifetime and read
+    # the first frame from a stream that terminates cleanly.
+    monkeypatch.setattr(scans_router, "_SSE_MAX_SECONDS", 1.0)
+    lines = []
+    async with client.stream("GET", f"/api/scans/{scan_id}/events") as resp:
+        async for line in resp.aiter_lines():
+            if line.startswith("data: "):
+                lines.append(line)
+    payload = json.loads(lines[0][len("data: "):])
+    assert payload["queue_position"] == 0

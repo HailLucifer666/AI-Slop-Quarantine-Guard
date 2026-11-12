@@ -17,14 +17,23 @@ import type { ScanProgress, ScanStatus } from "@/lib/types"
  * never fabricate an ETA), FILES is the real running count.
  */
 const PHASE_LABEL: Record<string, string> = {
+  cloning: "Downloading repository",
+  reading: "Reading files",
+  analyzing: "Starting analysis",
   dependencies: "Hallucinated packages",
   placeholders: "Placeholder code",
   secrets: "Leaked secrets",
   vulnerabilities: "Vulnerable dependencies",
   sast: "Security issues",
   licenses: "Risky licenses",
+  typosquat: "Typosquat check",
+  simplify: "Simplification pass",
   reporting: "Compiling report",
 }
+
+// A running scan whose heartbeat has been quiet longer than this is not "slow" —
+// say so, well before the server's 300s stale-lease reap marks it failed.
+const STALE_HEARTBEAT_SECONDS = 90
 
 const TAG_CLIP = "polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%)"
 
@@ -38,22 +47,31 @@ export function AnimatedScan({
   progress,
   startedAt,
   filesScanned,
+  queuePosition,
+  heartbeatAt,
   active,
 }: {
   status?: ScanStatus | "idle"
   progress?: ScanProgress | null
   startedAt?: string | null
   filesScanned?: number | null
+  /** How many queued scans precede this one (API sets it only while queued). */
+  queuePosition?: number | null
+  /** Liveness lease the API already returns — read here so stuck-vs-slow is visible. */
+  heartbeatAt?: string | null
   active: boolean
 }) {
   const reduce = useReducedMotion()
   const [now, setNow] = useState(() => Date.now())
 
+  // Tick while the scan is queued or running even if `active` has been dropped by
+  // the console (a capped poll must not freeze the elapsed clock on a live scan).
+  const live = active || status === "queued" || status === "running"
   useEffect(() => {
-    if (!active) return
+    if (!live) return
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
-  }, [active])
+  }, [live])
 
   const started = startedAt ? new Date(startedAt).getTime() : null
   const failed = status === "failed"
@@ -75,9 +93,26 @@ export function AnimatedScan({
       : done ? "Complete"
       : "Analysing"
 
-  const phaseCaption = determinate
+  const queuedCaption =
+    queuePosition != null && queuePosition > 0
+      ? `Queued · ${queuePosition} ahead`
+      : "Queued · next up"
+  const heartbeatAgeS = heartbeatAt
+    ? Math.max(0, Math.floor((now - new Date(heartbeatAt).getTime()) / 1000))
+    : null
+  const stale = status === "running" && heartbeatAgeS != null && heartbeatAgeS > STALE_HEARTBEAT_SECONDS
+  const baseCaption = determinate
     ? `${PHASE_LABEL[progress!.phase] ?? progress!.phase} · ${step}/${progress!.total}`
-    : active ? "Starting…" : "—"
+    : status === "queued"
+      ? queuedCaption
+      : progress?.phase
+        ? (PHASE_LABEL[progress.phase] ?? progress.phase)
+        : active
+          ? "Starting…"
+          : "—"
+  const phaseCaption = stale
+    ? `No heartbeat for ${Math.floor(heartbeatAgeS! / 60)}m — worker may be stuck`
+    : baseCaption
 
   const files = progress?.files_total ?? filesScanned ?? null
 

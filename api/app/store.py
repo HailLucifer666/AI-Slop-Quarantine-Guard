@@ -316,7 +316,34 @@ async def get_scan(scan_id: int) -> Optional[dict]:
     """Full scan detail (incl. findings) for GET /api/scans/{id}; None if missing."""
     async with async_session() as session:
         scan = await session.get(Scan, scan_id)
-        return _row_to_dict(scan, include_findings=True) if scan is not None else None
+        if scan is None:
+            return None
+        data = _row_to_dict(scan, include_findings=True)
+        if scan.status == "queued":
+            # Queue context for the dashboard: how many queued scans precede this one.
+            # 0 = next up. A RUNNING scan is not queued and counts for nobody.
+            data["queue_position"] = await _queued_ahead(session, scan_id)
+        return data
+
+
+async def _queued_ahead(session, scan_id: int) -> int:
+    """Count queued scans with a smaller id — FIFO, because enqueue follows
+    create_scan and ids are assigned at creation. The count self-corrects on every
+    poll; if orphan-requeue ever returns jobs out of id order, the position is
+    advisory UI information, not a guarantee (the Redis LPOS order is the truth the
+    worker consumes — this number is what a human reads)."""
+    result = await session.execute(
+        select(func.count())
+        .select_from(Scan)
+        .where(Scan.status == "queued", Scan.id < scan_id)
+    )
+    return int(result.scalar_one())
+
+
+async def queued_ahead(scan_id: int) -> int:
+    """Public wrapper for tests and callers without a session handy."""
+    async with async_session() as session:
+        return await _queued_ahead(session, scan_id)
 
 
 async def list_scans(limit: int = 50, offset: int = 0) -> list[dict]:

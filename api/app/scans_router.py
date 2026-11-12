@@ -186,7 +186,12 @@ async def _scan_event_stream(scan_id: int):
         if scan is None:
             yield f"event: error\ndata: {json.dumps({'detail': 'scan not found'})}\n\n"
             return
-        payload = {"status": scan["status"], "progress": scan["progress"]}
+        payload = {
+            "status": scan["status"],
+            "progress": scan["progress"],
+            # Queue context rides along so an SSE subscriber sees "you are N in line".
+            "queue_position": scan.get("queue_position"),
+        }
         if payload != last_payload:
             yield f"data: {json.dumps(payload)}\n\n"
             last_payload = payload

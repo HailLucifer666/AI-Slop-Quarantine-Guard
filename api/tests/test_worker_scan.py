@@ -173,3 +173,39 @@ def test_ingest_codebase_local_gated_in_production(monkeypatch):
 def test_ingest_codebase_unknown_source():
     with pytest.raises(IngestError):
         worker.ingest_codebase("ftp", "ref")
+
+
+@pytest.mark.asyncio
+async def test_scan_job_reports_progress_through_every_phase(scan_store, monkeypatch):
+    # Scans 21/22 (qwen-code, free-claude-code) read as hangs: the queued+clone+read
+    # window wrote NOTHING while the analyzer loop wrote transiently. The worker must
+    # report cloning before ingest, reading with the true file count after it, and the
+    # per-analyzer phases — with progress cleared on completion (existing contract).
+    # Probe (2026-11-13, run and restored): disabling the cloning/reading emissions reds
+# this test exactly (phases[0] becomes the first analyzer); disabling the
+# store queue_position branch reds both scan-api position tests.
+    scan_id = await store.create_scan("local", "/proj")
+    files = {"config.py": 'KEY = "AKIAIOSFODNN7REALKEY"\nx = 1\n'}
+    monkeypatch.setattr(
+        worker, "ingest_codebase",
+        lambda s, r: IngestResult(files=files, skipped=[], resolved_sha="a" * 40),
+    )
+    writes: list[dict] = []
+
+    async def recording(sid, payload):
+        writes.append(dict(payload))
+        await store.update_progress(sid, payload)
+
+    monkeypatch.setattr(worker, "update_progress", recording)
+
+    await worker.handle_scan_job({"scan_id": scan_id, "source": "local", "ref": "/proj"})
+
+    phases = [w["phase"] for w in writes]
+    assert phases[0] == "cloning", phases  # before the longest silent window
+    assert "reading" in phases
+    reading = next(w for w in writes if w["phase"] == "reading")
+    assert reading["files_total"] == len(files)
+    assert "dependencies" in phases and "simplify" in phases  # analyzer phases intact
+    row = await store.get_scan(scan_id)
+    assert row["status"] == "completed"
+    assert row["progress"] is None  # completion clears it — finished scans read clean

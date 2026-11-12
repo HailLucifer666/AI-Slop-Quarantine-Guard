@@ -12,7 +12,11 @@ import { ScanResults } from "./ScanResults"
 
 type Mode = "url" | "zip" | "local"
 const POLL_MS = 1500
-const TIMEOUT_MS = 120000
+// No 2-minute give-up: scans 21/22 (qwen-code, free-claude-code) legitimately ran
+// past 120s and this deadline threw "Still running in the background" while the
+// database showed the scan completing fine — the single biggest "hang" report.
+// Poll to a terminal status with a generous cap, and say so honestly past it.
+const MAX_POLL_MS = 30 * 60 * 1000
 const TABS: { id: Mode; label: string; icon: typeof Github }[] = [
   { id: "url", label: "Public URL", icon: Github },
   { id: "zip", label: "Upload .zip", icon: FileArchive },
@@ -48,7 +52,7 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
   const fileInput = useRef<HTMLInputElement>(null)
 
   const poll = useCallback(async (id: number) => {
-    const deadline = Date.now() + TIMEOUT_MS
+    const deadline = Date.now() + MAX_POLL_MS
     while (Date.now() < deadline) {
       const s = await getScan(id)
       setScan(s)
@@ -56,7 +60,9 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
       if (isTerminal(s.status)) return s
       await new Promise((r) => setTimeout(r, POLL_MS))
     }
-    throw new Error("Still running in the background — check Analyses for the result.")
+    throw new Error(
+      "Still running after 30 minutes — it may be queued behind other scans. Check Analyses for the result; this window stopped waiting."
+    )
   }, [])
 
   async function run() {
@@ -134,6 +140,8 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
           progress={scan?.progress}
           startedAt={scan?.created_at}
           filesScanned={scan?.analytics?.files_scanned ?? null}
+          queuePosition={scan?.queue_position ?? null}
+          heartbeatAt={scan?.heartbeat_at}
           active={active}
         />
         <div className="h-[360px] overflow-hidden">
