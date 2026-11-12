@@ -41,6 +41,7 @@ from app.coverage import (
 )
 from app.engines import probe_all, rules_missing_an_engine
 from app.grouping import group_findings, summarize_groups
+from app.manifests import collect_workspace_names
 from app.synthetic_diff import build_synthetic_diff
 
 logger = logging.getLogger("scan")
@@ -237,6 +238,9 @@ async def run_scan(
     repo_context = {
         "repo": "", "head_sha": "", "token": "",
         "fetch_file": _local_fetch_one(files), "check_exists": check_exists,
+        # Names this repo itself declares (workspace-internal packages) — SQG001
+        # downgrades a public-registry 404 for one of these instead of blocking.
+        "workspace_names": collect_workspace_names(files),
     }
     fetch4 = _local_fetch_four(files)
 
