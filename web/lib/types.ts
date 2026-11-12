@@ -55,9 +55,12 @@ export interface Finding {
   evidence_hash: string
   /** Content-derived id, stable across scans and line moves. */
   fingerprint: string
-  /** Empty means "not known", never "none apply" — do not render as "no CWE". */
-  cwe: string[]
-  advisories: Advisory[]
+  /** Empty means "not known", never "none apply" — do not render as "no CWE".
+   * Absent (undefined) occurs on findings stored before these fields shipped:
+   * historical rows are rendered as-is, so readers must treat absence the same
+   * as empty. */
+  cwe?: string[]
+  advisories?: Advisory[]
   severity: string | null
   cvss_score: number | null
   cvss_vector: string | null
