@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useRef, useState } from "react"
-import { FileArchive, FolderOpen, Github, Loader2, ScanLine } from "lucide-react"
+import { ArrowUpRight, FileArchive, FolderOpen, Github, Loader2, ScanLine } from "lucide-react"
 
 import { getScan, startLocalScan, startUrlScan, startZipScan } from "@/lib/api"
 import { isTerminal, type ScanDetail } from "@/lib/types"
@@ -104,7 +104,7 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
       {mode === "local" && (
         <div className="flex flex-col gap-1.5">
           <input className="wall-input" placeholder="C:\path\to\project  ·  /home/you/project" value={path} onChange={(e) => setPath(e.target.value)} disabled={busy} />
-          <p className="text-xs" style={{ color: "var(--wall-faint)" }}>Full path to a folder on the machine running the scanner (Windows or Unix style).</p>
+          <p className="text-xs" style={{ color: "var(--text-faint)" }}>Full path to a folder on the machine running the scanner (Windows or Unix style).</p>
         </div>
       )}
       {mode === "zip" && (
@@ -113,7 +113,7 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
             <FileArchive className="h-4 w-4" aria-hidden /> {file ? file.name : "Choose .zip"}
           </button>
           {file && !busy && (
-            <button onClick={() => { setFile(null); if (fileInput.current) fileInput.current.value = "" }} className="wall-click wall-focus text-xs" style={{ color: "var(--wall-muted)" }}>
+            <button onClick={() => { setFile(null); if (fileInput.current) fileInput.current.value = "" }} className="wall-click wall-focus inline-flex min-h-[44px] items-center text-sm" style={{ color: "var(--text-muted)" }}>
               Clear
             </button>
           )}
@@ -121,13 +121,13 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
         </div>
       )}
 
-      {error && <p className="text-sm" style={{ color: "var(--wall-act-failed)" }}>{error}</p>}
+      {error && <p role="alert" className="text-sm" style={{ color: "var(--sev-certain)" }}>{error}</p>}
 
       <button onClick={run} disabled={busy} className="wall-cta">
         {busy ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> {phase || "Working…"}</> : <><ScanLine className="h-4 w-4" aria-hidden /> Run scan</>}
       </button>
 
-      <div className="flex flex-col gap-3 rounded-xl p-4" style={{ border: "1px solid var(--wall-line)" }}>
+      <div className="flex flex-col gap-3 rounded-xl p-4" style={{ border: "1px solid var(--line)" }}>
         <div className="wall-label">Activity</div>
         <AnimatedScan
           status={scan?.status ?? (busy ? "queued" : "idle")}
@@ -144,15 +144,15 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
       {scan?.status === "completed" && (
         <div className="space-y-4">
           <ScanResults scan={scan} />
-          <button onClick={() => onOpenFindings(scan.id)} className="wall-click wall-focus text-xs" style={{ color: "var(--wall-muted)" }}>
-            Open full report ↗
+          <button onClick={() => onOpenFindings(scan.id)} className="wall-click wall-focus inline-flex min-h-[44px] items-center text-sm" style={{ color: "var(--text-muted)" }}>
+            Open full report <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
           </button>
         </div>
       )}
       {scan?.status === "failed" && (
-        <div className="rounded-md p-3 text-sm" style={{ color: "var(--wall-act-failed)", background: "rgba(255,59,92,0.07)", border: "1px solid rgba(255,59,92,0.22)" }}>
+        <div role="alert" className="rounded-md p-3 text-sm" style={{ color: "var(--sev-certain)", background: "rgba(255,59,92,0.07)", border: "1px solid rgba(255,59,92,0.22)" }}>
           <p>{friendlyError(scan.error ?? "unknown error")}</p>
-          {scan.error && <p className="mt-1.5 font-mono text-xs" style={{ color: "var(--wall-faint)" }}>Details: {scan.error}</p>}
+          {scan.error && <p className="mt-1.5 font-mono text-xs" style={{ color: "var(--text-faint)" }}>Details: {scan.error}</p>}
         </div>
       )}
     </div>

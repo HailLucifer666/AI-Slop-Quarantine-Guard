@@ -33,7 +33,7 @@ function useCountUp(value: number): number {
     let t0: number | null = null
     const step = (ts: number) => {
       if (t0 === null) t0 = ts
-      const p = Math.min(1, (ts - t0) / 800)
+      const p = Math.min(1, (ts - t0) / 600)
       const eased = 1 - Math.pow(1 - p, 3)
       const cur = Math.round(start + (value - start) * eased)
       setN(cur)
@@ -59,10 +59,10 @@ function Frame({ children, label }: { children: React.ReactNode; label: string }
       className="flex flex-col items-center gap-2"
       initial={reduced ? false : { opacity: 0, scale: 0.92 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.45, ease: "easeOut" }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
     >
       <div className="relative" style={{ width: SIZE, height: SIZE }}>{children}</div>
-      <div className="text-[11px] uppercase tracking-wide" style={{ color: "var(--wall-faint)" }}>{label}</div>
+      <div className="text-xs" style={{ color: "var(--text-faint)" }}>{label}</div>
     </motion.div>
   )
 }
@@ -71,8 +71,8 @@ function Center({ value, sub }: { value: number; sub: string }) {
   const n = useCountUp(value)
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center">
-      <span className="wall-num text-3xl leading-none" style={{ color: "var(--wall-text)" }}>{n}</span>
-      <span className="mt-1 text-[10px] uppercase tracking-wide" style={{ color: "var(--wall-faint)" }}>{sub}</span>
+      <span className="wall-num text-3xl leading-none" style={{ color: "var(--text)" }}>{n}</span>
+      <span className="mt-1 text-xs" style={{ color: "var(--text-faint)" }}>{sub}</span>
     </div>
   )
 }
@@ -85,9 +85,9 @@ export function Donut({ title, segments, centerSub }: { title: string; segments:
     <Frame label={title}>
       <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} role="img" aria-label={`${title}: ${total}`}>
         <g transform={`rotate(-90 ${CX} ${CX})`}>
-          <circle cx={CX} cy={CX} r={R} fill="none" stroke="var(--wall-line)" strokeWidth={STROKE} />
+          <circle cx={CX} cy={CX} r={R} fill="none" stroke="var(--line)" strokeWidth={STROKE} />
           {total === 0 ? (
-            <circle cx={CX} cy={CX} r={R} fill="none" stroke="var(--wall-sev-clean)" strokeWidth={STROKE} opacity={0.5} />
+            <circle cx={CX} cy={CX} r={R} fill="none" stroke="var(--sev-clean)" strokeWidth={STROKE} opacity={0.5} />
           ) : (
             segments
               .filter((s) => s.value > 0)
@@ -126,7 +126,7 @@ export function RingGauge({ title, value, max, color, centerSub }: { title: stri
     <Frame label={title}>
       <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} role="img" aria-label={`${title}: ${value} of ${max}`}>
         <g transform={`rotate(-90 ${CX} ${CX})`}>
-          <circle cx={CX} cy={CX} r={R} fill="none" stroke="var(--wall-line)" strokeWidth={STROKE} />
+          <circle cx={CX} cy={CX} r={R} fill="none" stroke="var(--line)" strokeWidth={STROKE} />
           <motion.circle
             cx={CX}
             cy={CX}

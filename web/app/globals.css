@@ -3,63 +3,38 @@
 @tailwind utilities;
 
 /*
- * Aurora-on-Black design tokens — single source of truth (mirrors web/DESIGN.md).
- * Tailwind names these via var(--token) in tailwind.config.ts.
+ * Command Wall — base layer only. The merged token VALUES (the `:root` block:
+ * --bg, --surface, --line, --accent-*, --sev-*, --text*, --dur-*, --ease-* …)
+ * live in web/app/dashboard/wall.css (single source of truth, mirrors
+ * web/DESIGN.md). This file keeps element styles + the RGB channel triples
+ * Tailwind needs for opacity modifiers (bg-bg/80 etc.).
+ */
+
+/*
+ * RGB channel triples mirroring the tokens in wall.css. Tailwind names colors
+ * as rgb(var(--x-rgb) / <alpha-value>) so opacity modifiers work — hex vars
+ * alone can't take /opacity. Values MUST match wall.css; edit there first.
  */
 :root {
-  /* Surfaces (cool near-black, layered) */
-  --bg: #06080a;
-  --surface: #0e1116;
-  --surface-elevated: #141922;
-  --border: rgba(120, 140, 255, 0.12);
-  --border-strong: rgba(120, 140, 255, 0.22);
-
-  /* Brand — Aurora */
-  --brand-indigo: #4a5bff;
-  --brand-teal: #16c8d4;
-  --brand-emerald: #2de08a;
-  --brand-gradient: linear-gradient(120deg, #4a5bff 0%, #16c8d4 52%, #2de08a 100%);
-  --scan: #22d3ee;
-
-  /* Severity ramp (separate warm axis) */
-  --sev-certain: #ff3b5c;
-  --sev-high: #ff8a3d;
-  --sev-medium: #ffc83d;
-  --sev-clean: #2de08a;
-
-  /* Text (all >=4.5:1 on --bg) */
-  --text: #eaeef6;
-  --text-muted: #9aa4b2;
-  --text-faint: #5b6472;
-
-  /* Glass */
-  --glass-bg: rgba(18, 22, 30, 0.6);
-  --glass-border-glow: rgba(120, 140, 255, 0.3); /* orbital active-node ring */
-
-  /*
-   * RGB channel triples for the same tokens above. Tailwind names colors as
-   * rgb(var(--x-rgb) / <alpha-value>) so opacity modifiers (bg-surface/60,
-   * bg-sev-certain/15) actually work — hex vars alone can't take /opacity.
-   */
-  --bg-rgb: 6 8 10;
-  --surface-rgb: 14 17 22;
-  --surface-elevated-rgb: 20 25 34;
-  --brand-indigo-rgb: 74 91 255;
-  --brand-teal-rgb: 22 200 212;
-  --brand-emerald-rgb: 45 224 138;
-  --scan-rgb: 34 211 238;
+  --bg-rgb: 4 6 12;
+  --surface-rgb: 10 14 24;
+  --surface-elevated-rgb: 10 14 24; /* alias of --surface (merged system has one surface) */
+  --accent-cyan-rgb: 22 224 224;
+  --accent-magenta-rgb: 255 61 139;
+  --accent-violet-rgb: 139 92 246;
+  --accent-green-rgb: 45 224 138;
   --sev-certain-rgb: 255 59 92;
   --sev-high-rgb: 255 138 61;
   --sev-medium-rgb: 255 200 61;
   --sev-clean-rgb: 45 224 138;
-  --text-rgb: 234 238 246;
-  --text-muted-rgb: 154 164 178;
-  --text-faint-rgb: 91 100 114;
+  --text-rgb: 234 240 255;
+  --text-muted-rgb: 138 149 173;
+  --text-faint-rgb: 111 120 144;
 }
 
 @layer base {
   * {
-    border-color: var(--border);
+    border-color: var(--line);
   }
   html {
     background-color: var(--bg);
@@ -78,25 +53,6 @@
   /* Tabular figures for data-heavy UI */
   .tnum {
     font-variant-numeric: tabular-nums;
-  }
-}
-
-@layer components {
-  /* Reusable glass panel — 1px aurora border + blur + inner top highlight */
-  .glass {
-    background: var(--glass-bg);
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
-    border: 1px solid var(--border);
-    box-shadow:
-      0 1px 0 0 rgba(255, 255, 255, 0.04) inset,
-      0 8px 40px -12px rgba(0, 0, 0, 0.6);
-  }
-  .text-gradient {
-    background: var(--brand-gradient);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
   }
 }
 

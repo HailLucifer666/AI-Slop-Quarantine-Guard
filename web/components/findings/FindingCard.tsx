@@ -34,10 +34,10 @@ export function FindingCard({ finding }: { finding: Finding }) {
   }
 
   return (
-    <div className="glass rounded-lg p-4">
+    <div className="wall-card rounded-lg p-4">
       <div className="flex flex-wrap items-center gap-2">
         <SeverityBadge confidence={finding.confidence} />
-        <span className="rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-text-muted">
+        <span className="rounded-md border border-line bg-surface px-2 py-1 font-mono text-xs text-text-muted">
           {finding.rule_id}
         </span>
         <span className="text-sm font-medium text-text">{checkName(finding.rule_id)}</span>
@@ -62,7 +62,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
-          className="mt-3 inline-flex items-center gap-1 text-xs text-text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-indigo"
+          className="mt-3 inline-flex items-center gap-1 text-xs text-text-muted hover:text-text wall-focus"
         >
           <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} aria-hidden />
           {open ? "Hide" : "Show"} evidence
@@ -70,7 +70,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
       )}
 
       {open && (
-        <pre className="mt-2 overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-xs leading-relaxed">
+        <pre className="mt-2 overflow-x-auto rounded-md border border-line bg-bg p-3 font-mono text-xs leading-relaxed">
           {ev.context_before.map((l, i) => (
             <div key={`b${i}`} className="text-text-faint">{l}</div>
           ))}
@@ -92,7 +92,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
               href={`https://cwe.mitre.org/data/definitions/${id.split("-").pop()}.html`}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded-md border border-border bg-surface px-2 py-0.5 font-mono text-xs text-text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-indigo"
+              className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-xs text-text-muted transition-colors hover:text-text wall-focus"
             >
               {id}
             </a>
@@ -103,13 +103,13 @@ export function FindingCard({ finding }: { finding: Finding }) {
               href={a.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded-md border border-sev-high/40 bg-sev-high/10 px-2 py-0.5 font-mono text-xs text-sev-high transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-indigo"
+              className="rounded-md border border-sev-high/40 bg-sev-high/10 px-2 py-0.5 font-mono text-xs text-sev-high transition-opacity hover:opacity-80 wall-focus"
             >
               {a.id}
             </a>
           ))}
           {finding.severity && (
-            <span className="rounded-md border border-border px-2 py-0.5 text-xs uppercase text-text-muted" title="Severity as reported by the advisory source — not computed by us.">
+            <span className="rounded-md border border-line px-2 py-0.5 text-xs text-text-muted" title="Severity as reported by the advisory source — not computed by us.">
               {finding.severity}
             </span>
           )}
@@ -119,34 +119,34 @@ export function FindingCard({ finding }: { finding: Finding }) {
       {/* Remediation. A concrete replacement is shown as a diff ONLY when it was derived
           mechanically from a named fixed version; anything else is prose that says so. */}
       {finding.remediation?.applicable && finding.remediation.suggested_replacement ? (
-        <div className="mt-3 rounded-md border border-brand-teal/30 bg-brand-teal/5 p-3">
+        <div className="mt-3 rounded-md border border-accent-cyan/30 bg-accent-cyan/5 p-3">
           <div className="flex items-start gap-2 text-sm text-text">
-            <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-brand-teal" aria-hidden />
+            <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-accent-cyan" aria-hidden />
             <span>{finding.remediation.text}</span>
           </div>
-          <pre className="mt-2 overflow-x-auto rounded border border-border bg-bg p-2 font-mono text-xs">
+          <pre className="mt-2 overflow-x-auto rounded border border-line bg-bg p-2 font-mono text-xs">
             <div className="text-sev-high">- {ev.snippet}</div>
-            <div className="text-brand-teal">+ {finding.remediation.suggested_replacement}</div>
+            <div className="text-accent-cyan">+ {finding.remediation.suggested_replacement}</div>
           </pre>
           {finding.remediation.basis && (
-            <p className="mt-2 text-[11px] text-text-faint">Basis: {finding.remediation.basis}.</p>
+            <p className="mt-2 text-xs text-text-faint">Basis: {finding.remediation.basis}.</p>
           )}
         </div>
       ) : finding.remediation ? (
-        <div className="mt-3 flex items-start gap-2 rounded-md border border-border bg-surface p-3 text-sm text-text-muted">
-          <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-brand-teal" aria-hidden />
+        <div className="mt-3 flex items-start gap-2 rounded-md border border-line bg-surface p-3 text-sm text-text-muted">
+          <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-accent-cyan" aria-hidden />
           <span>
             {finding.remediation.text}
             {finding.remediation.basis && (
-              <span className="mt-1 block text-[11px] text-text-faint">
+              <span className="mt-1 block text-xs text-text-faint">
                 No automatic fix offered: {finding.remediation.basis}.
               </span>
             )}
           </span>
         </div>
       ) : finding.fix_suggestion ? (
-        <div className="mt-3 flex items-start gap-2 rounded-md border border-brand-teal/30 bg-brand-teal/5 p-3 text-sm text-text-muted">
-          <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-brand-teal" aria-hidden />
+        <div className="mt-3 flex items-start gap-2 rounded-md border border-accent-cyan/30 bg-accent-cyan/5 p-3 text-sm text-text-muted">
+          <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-accent-cyan" aria-hidden />
           <span>{finding.fix_suggestion}</span>
         </div>
       ) : null}
@@ -156,7 +156,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
         <button
           onClick={explain}
           disabled={loadingExp}
-          className="mt-3 inline-flex items-center gap-2 rounded-md border border-brand-indigo/40 bg-brand-indigo/10 px-3 py-1.5 text-xs font-medium text-text transition-colors hover:bg-brand-indigo/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-indigo disabled:opacity-60"
+          className="mt-3 inline-flex items-center gap-2 rounded-md border border-accent-violet/40 bg-accent-violet/10 px-3 py-1.5 text-xs font-medium text-text transition-colors hover:bg-accent-violet/20 wall-focus disabled:opacity-60"
         >
           {loadingExp ? (
             <>
@@ -165,7 +165,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
             </>
           ) : (
             <>
-              <Sparkles className="h-3.5 w-3.5 text-brand-teal" aria-hidden />
+              <Sparkles className="h-3.5 w-3.5 text-accent-cyan" aria-hidden />
               Explain in plain English
             </>
           )}
@@ -175,8 +175,8 @@ export function FindingCard({ finding }: { finding: Finding }) {
       {expError && <p className="mt-2 text-xs text-sev-medium">{expError}</p>}
 
       {exp && (
-        <div className="mt-3 space-y-2 rounded-md border border-brand-indigo/30 bg-brand-indigo/5 p-3 text-sm">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-brand-teal">
+        <div className="mt-3 space-y-2 rounded-md border border-accent-violet/30 bg-accent-violet/5 p-3 text-sm">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-accent-cyan">
             <Sparkles className="h-3.5 w-3.5" aria-hidden />
             The Crew · advisory
           </div>
@@ -193,7 +193,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
               {exp.how_to_fix}
             </p>
           )}
-          <p className="pt-1 text-[11px] text-text-faint">
+          <p className="pt-1 text-xs text-text-faint">
             AI-generated guidance — it never changes the Guard&apos;s verdict.
           </p>
         </div>
@@ -201,7 +201,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
 
       {/* Provenance — which detector and rule revision produced this. A finding a reader
           cannot trace back to its source is a claim, not a result. */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 font-mono text-[11px] text-text-faint">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-2 font-mono text-xs text-text-faint">
         <span>
           via {finding.tool || "builtin"}
           {finding.tool_version ? ` ${finding.tool_version}` : ""}

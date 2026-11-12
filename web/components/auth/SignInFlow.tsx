@@ -3,16 +3,19 @@
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AnimatePresence, motion } from "framer-motion"
-import { ArrowRight, Check } from "lucide-react"
+import { ArrowRight, Check, Chrome } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
 import { AUTH_ENABLED, SKIP_KEY, supabase } from "@/lib/auth"
 import { cn } from "@/lib/utils"
 
 type Step = "email" | "code" | "success"
 
+/** Enter/exit timings from the merged motion tokens (300ms in, ~65% out). */
+const EASE_ENTER: [number, number, number, number] = [0.22, 1, 0.36, 1]
+const EASE_EXIT: [number, number, number, number] = [0.55, 0, 1, 0.45]
+
 /**
- * Developer sign-in flow (email → 6-digit code → success), Aurora-styled.
+ * Developer sign-in flow (email → 6-digit code → success), Command Wall tokens.
  * Auth is OPTIONAL: with Supabase configured the steps call OTP / OAuth; without
  * it, the flow advances in demo mode. "Skip for now" always works.
  */
@@ -109,9 +112,8 @@ export function SignInFlow() {
           <motion.div
             key="email"
             initial={{ opacity: 0, x: -40 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -40 }}
-            transition={{ duration: 0.35, ease: "easeOut" }}
+            animate={{ opacity: 1, x: 0, transition: { duration: 0.3, ease: EASE_ENTER } }}
+            exit={{ opacity: 0, x: -40, transition: { duration: 0.2, ease: EASE_EXIT } }}
             className="space-y-6 text-center"
           >
             <div className="space-y-1">
@@ -125,17 +127,18 @@ export function SignInFlow() {
               <button
                 onClick={googleSignIn}
                 disabled={!AUTH_ENABLED || busy}
-                className="flex w-full items-center justify-center gap-2 rounded-full border border-border bg-surface/60 py-3 text-text backdrop-blur transition-colors hover:bg-surface-elevated disabled:cursor-not-allowed disabled:opacity-40"
+                className="wall-focus flex w-full items-center justify-center gap-2 rounded-md py-3 text-text transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ background: "var(--surface)", border: "1px solid var(--line-strong)" }}
                 title={AUTH_ENABLED ? "" : "Connect Supabase to enable Google sign-in"}
               >
-                <span className="font-display text-lg">G</span>
+                <Chrome className="h-[18px] w-[18px]" aria-hidden />
                 <span>Sign in with Google</span>
               </button>
 
               <div className="flex items-center gap-4">
-                <div className="h-px flex-1 bg-border" />
+                <div className="h-px flex-1 bg-line" />
                 <span className="text-sm text-text-faint">or</span>
-                <div className="h-px flex-1 bg-border" />
+                <div className="h-px flex-1 bg-line" />
               </div>
 
               <form onSubmit={submitEmail}>
@@ -146,25 +149,27 @@ export function SignInFlow() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
-                    className="w-full rounded-full border border-border bg-surface/60 px-4 py-3 text-center text-text backdrop-blur placeholder:text-text-faint focus:border-brand-indigo focus:outline-none focus:ring-2 focus:ring-brand-indigo/40"
+                    className="wall-focus min-h-[44px] w-full rounded-md px-4 py-3 text-center text-md text-text outline-none placeholder:text-text-faint"
+                    style={{ background: "var(--surface)", border: "1px solid var(--line-strong)" }}
                   />
                   <button
                     type="submit"
                     disabled={busy}
                     aria-label="Continue"
-                    className="absolute right-1.5 top-1.5 flex h-9 w-9 items-center justify-center rounded-full bg-brand-gradient text-bg transition-transform hover:scale-105 disabled:opacity-50"
+                    className="wall-focus absolute right-1.5 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-md bg-brand-gradient transition-transform hover:scale-105 disabled:opacity-50"
+                    style={{ color: "var(--on-accent)" }}
                   >
-                    <ArrowRight className="h-4 w-4" />
+                    <ArrowRight className="h-4 w-4" aria-hidden />
                   </button>
                 </div>
               </form>
 
-              {error && <p className="text-sm text-sev-certain">{error}</p>}
+              {error && <p role="alert" className="text-sm text-sev-certain">{error}</p>}
             </div>
 
             <button
               onClick={skip}
-              className="text-sm text-text-muted underline-offset-4 transition-colors hover:text-text hover:underline"
+              className="wall-focus inline-flex min-h-[44px] items-center rounded-md text-sm text-text-muted underline-offset-4 transition-colors hover:text-text hover:underline"
             >
               Skip for now (demo) →
             </button>
@@ -175,9 +180,8 @@ export function SignInFlow() {
           <motion.div
             key="code"
             initial={{ opacity: 0, x: 40 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 40 }}
-            transition={{ duration: 0.35, ease: "easeOut" }}
+            animate={{ opacity: 1, x: 0, transition: { duration: 0.3, ease: EASE_ENTER } }}
+            exit={{ opacity: 0, x: 40, transition: { duration: 0.2, ease: EASE_EXIT } }}
             className="space-y-6 text-center"
           >
             <div className="space-y-1">
@@ -187,7 +191,10 @@ export function SignInFlow() {
               <p className="text-lg text-text-muted">Enter the 6-digit code sent to {email}</p>
             </div>
 
-            <div className="flex items-center justify-center gap-2 rounded-full border border-border bg-surface/60 px-4 py-4 backdrop-blur">
+            <div
+              className="flex items-center justify-center gap-2 rounded-md px-4 py-2"
+              style={{ border: "1px solid var(--line-strong)", background: "var(--surface)" }}
+            >
               {code.map((digit, i) => (
                 <input
                   key={i}
@@ -200,24 +207,25 @@ export function SignInFlow() {
                   value={digit}
                   onChange={(e) => onCodeChange(i, e.target.value)}
                   onKeyDown={(e) => onCodeKey(i, e)}
-                  className="w-8 bg-transparent text-center text-xl text-text focus:outline-none"
+                  aria-label={`Digit ${i + 1}`}
+                  className="wall-focus h-[44px] w-11 rounded-md bg-transparent text-center font-mono text-xl text-text outline-none"
                 />
               ))}
             </div>
 
-            {error && <p className="text-sm text-sev-certain">{error}</p>}
+            {error && <p role="alert" className="text-sm text-sev-certain">{error}</p>}
 
             <div className="flex gap-3">
-              <Button variant="outline" className="rounded-full" onClick={() => setStep("email")}>
+              <button onClick={() => setStep("email")} className="wall-cta-secondary">
                 Back
-              </Button>
-              <Button
-                className="flex-1 rounded-full"
+              </button>
+              <button
                 onClick={verify}
                 disabled={busy || !code.every((d) => d !== "")}
+                className="wall-cta flex-1"
               >
                 Continue
-              </Button>
+              </button>
             </div>
           </motion.div>
         )}
@@ -226,8 +234,8 @@ export function SignInFlow() {
           <motion.div
             key="success"
             initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: "easeOut" }}
+            animate={{ opacity: 1, y: 0, transition: { duration: 0.3, ease: EASE_ENTER } }}
+            exit={{ opacity: 0, y: 20, transition: { duration: 0.2, ease: EASE_EXIT } }}
             className="space-y-6 text-center"
           >
             <h1 className="font-display text-3xl font-bold tracking-tight text-text">You&apos;re in!</h1>
@@ -235,12 +243,13 @@ export function SignInFlow() {
             <motion.div
               initial={{ scale: 0.7, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.2, duration: 0.4 }}
+              transition={{ delay: 0.2, duration: 0.3, ease: EASE_ENTER }}
               className={cn(
                 "mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-brand-gradient",
               )}
+              style={{ color: "var(--on-accent)" }}
             >
-              <Check className="h-8 w-8 text-bg" />
+              <Check className="h-8 w-8" aria-hidden />
             </motion.div>
           </motion.div>
         )}

@@ -46,6 +46,21 @@ export interface RecentTarget {
   clean: boolean
   findings: number
   sev: Sev
+  /** Real per-scan read volume (ScanSummary.files_scanned) — globe ring thickness. */
+  filesScanned: number
+}
+
+/** One row of the Fix First queue: a recent scan ranked by how many provable,
+ * would-block findings it holds (spec §3.2). Derived purely from ScanSummary —
+ * no per-scan findings fetches (listScans caps at 50 rows; accepted in the plan). */
+export interface FixFirstRow {
+  scanId: number
+  ref: string
+  blockEligible: number // analytics.block_eligible
+  advisories: number // max(0, analytics.total_findings - analytics.block_eligible)
+  topChecks: { id: string; name: string; count: number }[] // ≤2, from by_rule, count desc
+  sev: Sev // worst confidence tier present (worstSev())
+  at: number // created_at epoch ms (recency tiebreak)
 }
 
 export interface WallData {
@@ -55,9 +70,13 @@ export interface WallData {
   slopToday: number // findings from scans created today
   findingsTotal: number
   certainTotal: number
+  highTotal: number // sum of analytics.by_confidence.HIGH over completed scans
+  mediumTotal: number // sum of analytics.by_confidence.MEDIUM over completed scans
+  incompleteCoverage: number // completed scans with analytics.fully_covered === false
   blockEligible: number // provable, would-block findings (advisory = findingsTotal - this)
   cleanRate: number // 0–100
   cleanPasses: number
+  fixFirst: FixFirstRow[] // ≤5, block_eligible desc → created_at desc → id desc
   byCheck: RankedCheck[] // ranked desc
   topFiles: { file_path: string; count: number }[]
   heatmap: HeatCell[] // last 13 weeks
@@ -65,6 +84,8 @@ export interface WallData {
   feed: AuditEntry[] // newest first
   globe: GlobeNode[] // one node per scan, newest last
   severitySeries: { certain: number; high: number; medium: number }[] // per completed scan, chrono
+  /** Max id among completed scans, else null — the beam-sweep trigger (spec §10.4). */
+  latestCompletedId: number | null
   /** Green/Red only for now — real signals (any recent scan failed). Yellow (a
    * completed scan with degraded analyzer coverage) needs the per-analyzer
    * `coverage[]`/`trust_status` field the backend doesn't expose yet (Phase 2) —
@@ -80,9 +101,13 @@ const EMPTY: WallData = {
   slopToday: 0,
   findingsTotal: 0,
   certainTotal: 0,
+  highTotal: 0,
+  mediumTotal: 0,
+  incompleteCoverage: 0,
   blockEligible: 0,
   cleanRate: 100,
   cleanPasses: 0,
+  fixFirst: [],
   byCheck: [],
   topFiles: [],
   heatmap: [],
@@ -90,6 +115,7 @@ const EMPTY: WallData = {
   feed: [],
   globe: [],
   severitySeries: [],
+  latestCompletedId: null,
   trustStatus: "green",
   hasRecentFailure: false,
 }
@@ -109,7 +135,10 @@ function isoDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
-function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
+/** Derive every panel's numbers from real records. Exported for QA (the FixFirst
+ * ranking fixture contract in docs/design/dashboard-overhaul.md §3.2 tests this
+ * pure function directly). */
+export function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
   if (scans.length === 0 && audit.length === 0) return EMPTY
 
   const now = Date.now()
@@ -121,6 +150,9 @@ function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
 
   let findingsTotal = 0
   let certainTotal = 0
+  let highTotal = 0
+  let mediumTotal = 0
+  let incompleteCoverage = 0
   let blockEligible = 0
   let cleanPasses = 0
   let slopToday = 0
@@ -134,6 +166,9 @@ function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
     if (!a) continue
     findingsTotal += a.total_findings
     certainTotal += a.by_confidence?.CERTAIN ?? 0
+    highTotal += a.by_confidence?.HIGH ?? 0
+    mediumTotal += a.by_confidence?.MEDIUM ?? 0
+    if (a.fully_covered === false) incompleteCoverage += 1
     blockEligible += a.block_eligible ?? 0
     for (const [id, n] of Object.entries(a.by_rule ?? {})) ruleCounts[id] = (ruleCounts[id] ?? 0) + n
     for (const f of a.top_files ?? []) fileCounts[f.file_path] = (fileCounts[f.file_path] ?? 0) + f.count
@@ -173,6 +208,45 @@ function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
     (s) => s.created_at && now - new Date(s.created_at).getTime() <= TEN_MIN,
   ).length
 
+  // Fix First — recent scans ranked by block-eligible count (spec §3.2, exact):
+  // completed + analytics present + block_eligible > 0 + created_at present,
+  // then block_eligible DESC → created_at DESC → id DESC, top 5.
+  const fixFirst: FixFirstRow[] = scans
+    .filter(
+      (s) =>
+        s.status === "completed" &&
+        s.analytics != null &&
+        (s.analytics.block_eligible ?? 0) > 0 &&
+        s.created_at != null,
+    )
+    .sort((a, b) => {
+      const byBlock = (b.analytics?.block_eligible ?? 0) - (a.analytics?.block_eligible ?? 0)
+      if (byBlock !== 0) return byBlock
+      const byAt = new Date(b.created_at!).getTime() - new Date(a.created_at!).getTime()
+      if (byAt !== 0) return byAt
+      return b.id - a.id
+    })
+    .slice(0, 5)
+    .map((s): FixFirstRow | null => {
+      const a = s.analytics
+      const createdAt = s.created_at
+      if (!a || !createdAt) return null // filter guarantees both; keeps TS honest
+      return {
+        scanId: s.id,
+        ref: s.ref,
+        blockEligible: a.block_eligible ?? 0,
+        advisories: Math.max(0, a.total_findings - (a.block_eligible ?? 0)),
+        topChecks: Object.entries(a.by_rule ?? {})
+          .filter(([, n]) => n > 0)
+          .sort((x, y) => y[1] - x[1])
+          .slice(0, 2)
+          .map(([id, count]) => ({ id, name: CHECKS[id]?.name ?? id, count })),
+        sev: worstSev(a),
+        at: new Date(createdAt).getTime(),
+      }
+    })
+    .filter((r): r is FixFirstRow => r != null)
+
   const recentTargets: RecentTarget[] = [...scans]
     .filter((s) => s.created_at)
     .sort((a, b) => (a.created_at! < b.created_at! ? 1 : -1))
@@ -184,6 +258,7 @@ function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
       clean: !!s.analytics?.clean,
       findings: s.analytics?.total_findings ?? 0,
       sev: worstSev(s.analytics),
+      filesScanned: s.files_scanned,
     }))
 
   const globe: GlobeNode[] = completedChrono.map((s) => ({
@@ -202,6 +277,11 @@ function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
 
   const hasRecentFailure = scans.some((s) => s.status === "failed")
 
+  const latestCompletedId = completed.reduce<number | null>(
+    (acc, s) => (acc == null || s.id > acc ? s.id : acc),
+    null,
+  )
+
   return {
     scanned: scans.length,
     scannedRecent,
@@ -209,9 +289,13 @@ function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
     slopToday,
     findingsTotal,
     certainTotal,
+    highTotal,
+    mediumTotal,
+    incompleteCoverage,
     blockEligible,
     cleanRate: completed.length ? Math.round((cleanPasses / completed.length) * 100) : 100,
     cleanPasses,
+    fixFirst,
     byCheck,
     topFiles,
     heatmap,
@@ -219,6 +303,7 @@ function derive(scans: ScanSummary[], audit: AuditEntry[]): WallData {
     feed: audit,
     globe,
     severitySeries,
+    latestCompletedId,
     trustStatus: hasRecentFailure ? "red" : "green",
     hasRecentFailure,
   }

@@ -35,8 +35,8 @@ export function FindingsView({ id }: { id: string }) {
     }
   }, [id])
 
-  if (error) return <p className="text-sm" style={{ color: "var(--wall-act-failed)" }}>{error}</p>
-  if (!scan) return <p className="flex items-center gap-2 text-sm" style={{ color: "var(--wall-muted)" }}><Loader2 className="h-4 w-4 animate-spin" /> Loading scan…</p>
+  if (error) return <p className="text-sm" style={{ color: "var(--act-failed)" }}>{error}</p>
+  if (!scan) return <p className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}><Loader2 className="h-4 w-4 animate-spin" /> Loading scan…</p>
 
   return <ScanResults scan={scan} />
 }
