@@ -9,7 +9,7 @@ import { Area, AreaChart, ResponsiveContainer } from "recharts"
  */
 export function MiniSparkline({
   data,
-  color = "var(--brand-teal)",
+  color = "var(--accent-cyan)",
   height = 36,
 }: {
   data: number[]

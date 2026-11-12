@@ -24,17 +24,17 @@ interface StatusStyle {
 }
 
 const STATUS: Record<RuleStatus, StatusStyle> = {
-  ran: { label: "Ran", color: "var(--wall-sev-clean)", Icon: CheckCircle2, conclusive: true },
-  partial: { label: "Partial", color: "var(--wall-sev-medium)", Icon: AlertTriangle, conclusive: false },
-  not_run_unsupported: { label: "Not run · unsupported", color: "var(--wall-faint)", Icon: CircleSlash, conclusive: false },
-  not_run_engine_missing: { label: "Not run · engine missing", color: "var(--wall-sev-medium)", Icon: CircleSlash, conclusive: false },
-  not_run_disabled: { label: "Switched off", color: "var(--wall-faint)", Icon: MinusCircle, conclusive: false },
-  errored: { label: "Error", color: "var(--wall-act-failed)", Icon: XCircle, conclusive: false },
-  timed_out: { label: "Timed out", color: "var(--wall-act-failed)", Icon: Clock, conclusive: false },
+  ran: { label: "Ran", color: "var(--sev-clean)", Icon: CheckCircle2, conclusive: true },
+  partial: { label: "Partial", color: "var(--sev-medium)", Icon: AlertTriangle, conclusive: false },
+  not_run_unsupported: { label: "Not run · unsupported", color: "var(--text-faint)", Icon: CircleSlash, conclusive: false },
+  not_run_engine_missing: { label: "Not run · engine missing", color: "var(--sev-medium)", Icon: CircleSlash, conclusive: false },
+  not_run_disabled: { label: "Switched off", color: "var(--text-faint)", Icon: MinusCircle, conclusive: false },
+  errored: { label: "Error", color: "var(--sev-certain)", Icon: XCircle, conclusive: false },
+  timed_out: { label: "Timed out", color: "var(--sev-certain)", Icon: Clock, conclusive: false },
 }
 
 const UNKNOWN: StatusStyle = {
-  label: "Unknown", color: "var(--wall-faint)", Icon: CircleSlash, conclusive: false,
+  label: "Unknown", color: "var(--text-faint)", Icon: CircleSlash, conclusive: false,
 }
 
 export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
@@ -44,7 +44,7 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
     return (
       <section className="wall-card p-4">
         <h3 className="wall-label">What was checked</h3>
-        <p className="mt-2 text-sm" style={{ color: "var(--wall-muted)" }}>
+        <p className="mt-2 text-sm" style={{ color: "var(--text-muted)" }}>
           Coverage wasn&apos;t recorded for this scan, so we can&apos;t say which checks ran.
           Re-scan to get a full coverage report.
         </p>
@@ -58,7 +58,7 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
     <section className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="wall-label">What was checked</h3>
-        <span className="text-xs" style={{ color: incomplete > 0 ? "var(--wall-sev-medium)" : "var(--wall-sev-clean)" }}>
+        <span className="text-xs" style={{ color: incomplete > 0 ? "var(--sev-medium)" : "var(--sev-clean)" }}>
           {coverage.rules_ran} of {coverage.rules_total} checks ran
         </span>
       </div>
@@ -67,14 +67,14 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
         <div
           className="flex items-start gap-2 rounded-lg p-3 text-sm"
           style={{
-            color: "var(--wall-muted)",
+            color: "var(--text-muted)",
             background: "rgba(255,200,61,0.06)",
             border: "1px solid rgba(255,200,61,0.2)",
           }}
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--wall-sev-medium)" }} aria-hidden />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--sev-medium)" }} aria-hidden />
           <span>
-            <strong style={{ color: "var(--wall-text)" }}>
+            <strong style={{ color: "var(--text)" }}>
               {incomplete} check{incomplete === 1 ? "" : "s"} didn&apos;t reach a conclusive result.
             </strong>{" "}
             Anything those would have caught is unknown here — not absent.
@@ -90,12 +90,12 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
             <div
               key={rule.rule_id}
               className="rounded-lg p-3"
-              style={{ border: "1px solid var(--wall-line)", background: "var(--wall-bg-deep)" }}
+              style={{ border: "1px solid var(--line)", background: "var(--bg-deep)" }}
             >
               <div className="flex flex-wrap items-center gap-2">
                 <Icon className="h-4 w-4 shrink-0" style={{ color: style.color }} aria-hidden />
-                <span className="font-mono text-xs" style={{ color: "var(--wall-faint)" }}>{rule.rule_id}</span>
-                <span className="text-sm font-medium" style={{ color: "var(--wall-text)" }}>
+                <span className="font-mono text-xs" style={{ color: "var(--text-faint)" }}>{rule.rule_id}</span>
+                <span className="text-sm font-medium" style={{ color: "var(--text)" }}>
                   {checkName(rule.rule_id) || rule.title}
                 </span>
                 <span
@@ -104,9 +104,9 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
                 >
                   {style.label}
                 </span>
-                <span className="ml-auto flex items-center gap-3 text-xs" style={{ color: "var(--wall-faint)" }}>
+                <span className="ml-auto flex items-center gap-3 text-xs" style={{ color: "var(--text-faint)" }}>
                   {rule.duration_ms !== null && <span>{formatDuration(rule.duration_ms)}</span>}
-                  <span className="wall-num text-sm" style={{ color: rule.findings > 0 ? "var(--wall-text)" : "var(--wall-faint)" }}>
+                  <span className="wall-num text-sm" style={{ color: rule.findings > 0 ? "var(--text)" : "var(--text-faint)" }}>
                     {rule.findings}
                   </span>
                 </span>
@@ -114,12 +114,12 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
 
               {rule.covered.length > 0 && (
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-                  <span style={{ color: "var(--wall-faint)" }}>Covered:</span>
+                  <span style={{ color: "var(--text-faint)" }}>Covered:</span>
                   {rule.covered.map((item) => (
                     <span
                       key={item}
                       className="rounded px-1.5 py-0.5"
-                      style={{ color: "var(--wall-muted)", background: "rgba(255,255,255,0.04)" }}
+                      style={{ color: "var(--text-muted)", background: "rgba(255,255,255,0.04)" }}
                     >
                       {item}
                     </span>
@@ -130,12 +130,12 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
               {/* The load-bearing row: what this check could NOT see. */}
               {rule.not_covered.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
-                  <span style={{ color: "var(--wall-sev-medium)" }}>Not covered:</span>
+                  <span style={{ color: "var(--sev-medium)" }}>Not covered:</span>
                   {rule.not_covered.map((item) => (
                     <span
                       key={item}
                       className="rounded px-1.5 py-0.5"
-                      style={{ color: "var(--wall-sev-medium)", background: "rgba(255,200,61,0.08)" }}
+                      style={{ color: "var(--sev-medium)", background: "rgba(255,200,61,0.08)" }}
                     >
                       {item}
                     </span>
@@ -144,11 +144,11 @@ export function CoveragePanel({ coverage }: { coverage: Coverage | null }) {
               )}
 
               {rule.detail && (
-                <p className="mt-1.5 text-xs" style={{ color: "var(--wall-faint)" }}>{rule.detail}</p>
+                <p className="mt-1.5 text-xs" style={{ color: "var(--text-faint)" }}>{rule.detail}</p>
               )}
 
               {rule.engine && rule.engine !== "builtin" && (
-                <p className="mt-1 font-mono text-[11px]" style={{ color: "var(--wall-faint)" }}>
+                <p className="mt-1 font-mono text-xs" style={{ color: "var(--text-faint)" }}>
                   {rule.engine}{rule.engine_version ? ` ${rule.engine_version}` : ""}
                 </p>
               )}

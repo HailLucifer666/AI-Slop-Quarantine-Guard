@@ -36,23 +36,22 @@ function GroupRow({ group }: { group: FindingGroup }) {
       <button
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full flex-wrap items-center gap-2 p-4 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2"
-        style={{ ["--tw-ring-color" as string]: "var(--wall-cyan)" }}
+        className="wall-focus flex w-full flex-wrap items-center gap-2 p-4 text-left transition-colors hover:bg-white/[0.02]"
       >
         <SeverityBadge confidence={group.confidence} />
-        <span className="rounded-md px-2 py-1 font-mono text-xs" style={{ color: "var(--wall-faint)", border: "1px solid var(--wall-line)" }}>
+        <span className="rounded-md px-2 py-1 font-mono text-xs" style={{ color: "var(--text-faint)", border: "1px solid var(--line)" }}>
           {group.rule_id}
         </span>
-        <span className="text-sm font-medium" style={{ color: "var(--wall-text)" }}>
+        <span className="text-sm font-medium" style={{ color: "var(--text)" }}>
           {checkName(group.rule_id)}
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm" style={{ color: "var(--wall-muted)" }}>
+        <span className="min-w-0 flex-1 truncate text-sm" style={{ color: "var(--text-muted)" }}>
           {group.title}
         </span>
-        <span className="flex shrink-0 items-center gap-2 text-xs" style={{ color: "var(--wall-muted)" }}>
+        <span className="flex shrink-0 items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
           <Layers className="h-3.5 w-3.5" aria-hidden />
           <span className="wall-num">{group.count}</span>
-          <span style={{ color: "var(--wall-faint)" }}>
+          <span style={{ color: "var(--text-faint)" }}>
             in {group.file_count} file{group.file_count === 1 ? "" : "s"}
           </span>
           <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} aria-hidden />
@@ -60,15 +59,15 @@ function GroupRow({ group }: { group: FindingGroup }) {
       </button>
 
       {open && (
-        <div className="border-t px-4 pb-4 pt-3" style={{ borderColor: "var(--wall-line)" }}>
+        <div className="border-t px-4 pb-4 pt-3" style={{ borderColor: "var(--line)" }}>
           <ul className="space-y-1.5">
             {group.occurrences.slice(0, limit).map((o) => (
               <li key={o.fingerprint + o.line_start} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs">
-                <span className="font-mono" style={{ color: "var(--wall-cyan)" }}>
+                <span className="font-mono" style={{ color: "var(--accent-cyan)" }}>
                   {o.file_path}:{o.line_start}
                 </span>
                 {o.snippet && (
-                  <code className="min-w-0 flex-1 truncate rounded px-1.5 py-0.5 font-mono" style={{ color: "var(--wall-muted)", background: "rgba(255,255,255,0.04)" }}>
+                  <code className="min-w-0 flex-1 truncate rounded px-1.5 py-0.5 font-mono" style={{ color: "var(--text-muted)", background: "rgba(255,255,255,0.04)" }}>
                     {o.snippet}
                   </code>
                 )}
@@ -86,7 +85,7 @@ function GroupRow({ group }: { group: FindingGroup }) {
           )}
 
           {notInPayload > 0 && (
-            <p className="mt-3 text-xs" style={{ color: "var(--wall-faint)" }}>
+            <p className="mt-3 text-xs" style={{ color: "var(--text-faint)" }}>
               Showing {group.occurrences_shown} of {group.count} occurrences. The rest are counted
               but not listed here — open the full findings list below to see every one.
             </p>
@@ -114,7 +113,7 @@ export function GroupedFindings({
     <section className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="wall-label">Issues found</h3>
-        <span className="text-xs" style={{ color: "var(--wall-faint)" }}>
+        <span className="text-xs" style={{ color: "var(--text-faint)" }}>
           {groups.groups_total} distinct issue{groups.groups_total === 1 ? "" : "s"} ·{" "}
           {groups.findings_total} finding{groups.findings_total === 1 ? "" : "s"}
           {groups.collapsed_groups > 0 && ` · ${groups.collapsed_groups} grouped`}
@@ -134,8 +133,8 @@ export function GroupedFindings({
               ) : (
                 // Fingerprint mismatch (e.g. an older stored scan). Show the location we
                 // do have rather than dropping the finding from the view entirely.
-                <div key={o.fingerprint + o.line_start} className="wall-card p-4 text-sm" style={{ color: "var(--wall-muted)" }}>
-                  <span className="font-mono text-xs" style={{ color: "var(--wall-cyan)" }}>
+                <div key={o.fingerprint + o.line_start} className="wall-card p-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                  <span className="font-mono text-xs" style={{ color: "var(--accent-cyan)" }}>
                     {o.file_path}:{o.line_start}
                   </span>
                   <p className="mt-1">{group.title}</p>

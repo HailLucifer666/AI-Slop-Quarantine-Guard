@@ -19,7 +19,7 @@ const LANE_COLOR: Record<string, string> = {
 }
 const LANES: { id: string; color: string }[] = RULE_IDS.map((id) => ({
   id,
-  color: LANE_COLOR[id] ?? "#5b6472",
+  color: LANE_COLOR[id] ?? "#6f7890", // canvas can't read CSS vars — hex mirror of --text-faint
 }))
 
 function noise(n: number): number {
@@ -108,10 +108,10 @@ export function ActivitySpectrum({ active, counts }: { active: boolean; counts: 
           canvas lane centers at (i+0.5)·h/N, so every label lines up with its lane. */}
       <div className="flex shrink-0 flex-col">
         {LANES.map((l) => (
-          <div key={l.id} className="flex flex-1 items-center gap-2.5 text-sm" style={{ color: "var(--wall-muted)" }}>
+          <div key={l.id} className="flex flex-1 items-center gap-2.5 text-sm" style={{ color: "var(--text-muted)" }}>
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: l.color, boxShadow: `0 0 8px ${l.color}` }} aria-hidden />
             <span className="w-44 whitespace-nowrap">{CHECKS[l.id]?.name ?? l.id}</span>
-            <span className="wall-num" style={{ color: "var(--wall-text)" }}>{counts[l.id] ?? 0}</span>
+            <span className="wall-num" style={{ color: "var(--text)" }}>{counts[l.id] ?? 0}</span>
           </div>
         ))}
       </div>
