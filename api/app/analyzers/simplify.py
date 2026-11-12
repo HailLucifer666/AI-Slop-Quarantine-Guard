@@ -334,14 +334,28 @@ def _statement_blocks(tree: ast.AST):
 
 
 def _find_rewrites(tree: ast.AST) -> List[Tuple[int, int, Rewrite]]:
-    """(start line, end line, rewrite) for every collapsible region in a module."""
+    """(start line, end line, rewrite) for every collapsible region in a module.
+
+    elif-tail If nodes — the ``orelse[0]`` of another If, which covers both ``elif``
+    and ``else:`` + single nested ``if`` — are skipped for the if/else rules: their
+    "N lines can be 1" claim is factually false for a chain fragment, and the
+    suggested one-liner lands at the elif's indentation where it unconditionally
+    overwrites the variable, silently dropping the chain's earlier arms (scan #20
+    findings #19/#22/#23 on openai/codex-security proposed exactly such
+    behavior-destroying rewrites; three of six SQG009 suggestions were broken this
+    way). A chain's HEAD still matches when it is a genuine 2-arm if/else.
+    """
     found: List[Tuple[int, int, Rewrite]] = []
+    chain_tails: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and node.orelse and isinstance(node.orelse[0], ast.If):
+            chain_tails.add(id(node.orelse[0]))
     for block in _statement_blocks(tree):
         for index, stmt in enumerate(block):
             prev = block[index - 1] if index else None
             following = block[index + 1] if index + 1 < len(block) else None
 
-            if isinstance(stmt, ast.If):
+            if isinstance(stmt, ast.If) and id(stmt) not in chain_tails:
                 # Order matters: an `if k in d` guard also fits the generic ternary
                 # shape, and `d.get(k, default)` is the better rewrite of the two, so
                 # it must be offered first.

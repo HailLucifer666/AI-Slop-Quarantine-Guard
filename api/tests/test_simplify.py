@@ -442,3 +442,75 @@ def test_a_rewrite_at_the_width_limit_is_still_offered():
     return value
 """
     assert _replacement(source) == "value = a if flag else b"
+
+
+# --- elif-chain fragments: "N lines can be 1" is false, the one-liner is a bug --
+# Probe (2026-11-13, run and restored): emptying the skip-set construction reded
+# exactly the two chain tests (the tail refired) while all 47 others stayed green.
+# Two earlier probe attempts were discarded as no-ops - one was syntactically
+# beside the loop line instead of replacing it, one disabled ALL if/else rules
+# and made the no-finding assertions vacuously green. Both are the
+# silently-failed-mutation class; the diff was verified before trusting red.
+
+def test_three_arm_assign_chain_gets_no_finding():
+    # scan #20 finding #22's exact shape (workbench_target.py): the suggested
+    # one-liner lands at the elif's indentation and unconditionally overwrites the
+    # variable, silently dropping the chain's first arm. No finding is honest;
+    # "can be 1" never is for a chain fragment.
+    source = (
+        "def f(kind, scan):\n"
+        "    if kind == 'working_tree':\n"
+        "        digest = scan['diff']\n"
+        "    elif kind in {'commit', 'range'}:\n"
+        "        digest = clean()\n"
+        "    else:\n"
+        "        digest = scan['snapshot']\n"
+        "    return digest\n"
+    )
+    assert _run(source) == []
+
+
+def test_three_arm_return_chain_gets_no_finding():
+    # The boolean-return rule has the same elif-tail exposure (scan #20 finding #19
+    # quoted an elif inside a three-arm normalization chain).
+    source = (
+        "def f(x):\n"
+        "    if x == 1:\n"
+        "        return True\n"
+        "    elif x == 2:\n"
+        "        return False\n"
+        "    else:\n"
+        "        return True\n"
+    )
+    assert _run(source) == []
+
+
+def test_else_with_single_nested_if_gets_no_finding():
+    # `else:` followed by one nested `if` is the same AST shape as an elif tail
+    # (orelse[0] is an If) — the skip must cover it too.
+    source = (
+        "def f(x, y):\n"
+        "    if x:\n"
+        "        v = 1\n"
+        "    else:\n"
+        "        if y:\n"
+        "            v = 2\n"
+        "    return v\n"
+    )
+    assert _run(source) == []
+
+
+def test_plain_two_arm_if_else_still_suggested():
+    # Negative control: the genuine 2-arm shape keeps its suggestion — the skip
+    # must never switch the rule off.
+    source = (
+        "def f(kind, scan):\n"
+        "    if kind == 'working_tree':\n"
+        "        digest = scan['diff']\n"
+        "    else:\n"
+        "        digest = scan['snapshot']\n"
+        "    return digest\n"
+    )
+    findings = _run(source)
+    assert len(findings) == 1
+    assert "conditional expression" in findings[0].message
