@@ -186,7 +186,15 @@ async def _scan_event_stream(scan_id: int):
         if scan is None:
             yield f"event: error\ndata: {json.dumps({'detail': 'scan not found'})}\n\n"
             return
-        payload = {"status": scan["status"], "progress": scan["progress"]}
+        payload = {
+            "status": scan["status"],
+            "progress": scan["progress"],
+            # Queue context rides along so an SSE subscriber sees "you are N in line".
+            # Shape note: this frame ALWAYS carries the key (null when not queued),
+            # while store.get_scan omits it entirely for non-queued rows — deliberate;
+            # subscribers should treat null and missing alike.
+            "queue_position": scan.get("queue_position"),
+        }
         if payload != last_payload:
             yield f"data: {json.dumps(payload)}\n\n"
             last_payload = payload
