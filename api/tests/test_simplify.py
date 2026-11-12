@@ -446,7 +446,7 @@ def test_a_rewrite_at_the_width_limit_is_still_offered():
 
 # --- elif-chain fragments: "N lines can be 1" is false, the one-liner is a bug --
 # Probe (2026-11-13, run and restored): emptying the skip-set construction reded
-# exactly the two chain tests (the tail refired) while all 47 others stayed green.
+# exactly the two chain tests (the tail refired) while the other 34 tests in this file stayed green.
 # Two earlier probe attempts were discarded as no-ops - one was syntactically
 # beside the loop line instead of replacing it, one disabled ALL if/else rules
 # and made the no-finding assertions vacuously green. Both are the
@@ -486,8 +486,10 @@ def test_three_arm_return_chain_gets_no_finding():
 
 
 def test_else_with_single_nested_if_gets_no_finding():
-    # `else:` followed by one nested `if` is the same AST shape as an elif tail
-    # (orelse[0] is an If) — the skip must cover it too.
+    # `else:` followed by one nested `if/else` assigning the same variable is the
+    # same AST shape as an elif tail (orelse[0] is an If) — the skip must cover it
+    # too. The inner if carries an ELSE arm on purpose: without one, no rule ever
+    # matched the shape and this test was vacuously green (review 2026-11-13).
     source = (
         "def f(x, y):\n"
         "    if x:\n"
@@ -495,6 +497,8 @@ def test_else_with_single_nested_if_gets_no_finding():
         "    else:\n"
         "        if y:\n"
         "            v = 2\n"
+        "        else:\n"
+        "            v = 3\n"
         "    return v\n"
     )
     assert _run(source) == []
