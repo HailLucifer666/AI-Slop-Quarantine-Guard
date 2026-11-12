@@ -448,6 +448,29 @@ How to ensure the Guard works reliably over time?
 
 ---
 
+## ADR-021: Tooling Boundaries — kee, Cloudflare Audit Skill, codex-security
+
+**Date:** 2026-11-11  
+**Status:** ACCEPTED
+
+**Context:**  
+Three external security tools were evaluated for adoption. The risk under review: LLM-backed tooling creeping into the deterministic Guard, which would break the two-layer model (ADR-003) and the honest promise (ADR-019).
+
+**Decision:**  
+- **kee** (engineering-craft methodology): adopted as the *review gate* — its substance is documented in `CONTRIBUTING.md` and the PR template as process, deliberately not machine-enforced. The tool itself is the maintainer's local harness, not a contributor requirement.
+- **cloudflare/security-audit-skill** (agent skill, MIT): adopted as the *dev-side offline auditor* of this repo. Findings are advisory until proven by execution in this repo's own harness; steps needing an OS sandbox (absent on the maintainer's machine) downgrade to `needs_validation` per the skill's own rule.
+- **openai/codex-security** (npm CLI): adopted as an *advisory, out-of-band bot only* (`.github/workflows/codex-security.yml`, `workflow_dispatch` only). Never in the fast PR gate, never a required check, never blocking.
+
+**Rationale:**  
+- No LLM-backed scanner enters the deterministic Guard path — ADR-003 extended from the product to the toolchain. `.github/workflows/strix.yml` already established the pattern: advisory, firewalled, never blocking.
+- The audit skill's confirmed/needs_validation split maps onto this repo's prove-by-execution standard (`docs/AUDIT_2026-08-22.md`).
+- kee's rules are portable prose in `CONTRIBUTING.md`; depending on a personal skill for a public gate would be a gate contributors cannot express.
+
+**Tradeoff:**  
+Running the codex bot at all sits in tension with this log's guiding principle ("no over-engineering"). Accepted deliberately: dispatch-only, out of the PR path, never required — its cost is one optional manual workflow, and its findings carry no authority until proven, exactly like Strix's.
+
+---
+
 ## Deferred Decisions (Right Idea, Wrong Phase)
 
 ### Deferred-1: Two-Wave Pipeline (Fast Checks Now, Deep Checks Later)
