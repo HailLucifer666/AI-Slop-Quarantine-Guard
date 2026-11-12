@@ -17,12 +17,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The `secrets` context is NOT available in job-level `if:` expressions — a
+  # workflow that used it there failed to parse on every trigger (0s startup
+  # failures since the file was added). The canonical pattern: a guard job reads
+  # the secret in a step env and publishes the verdict as an output, and the scan
+  # job gates on `needs`. (Review 2026-11-13: these 0s failures were the red CI
+  # on merged commits — the files had never run successfully before.)
+  key-guard:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.key.outputs.has_key }}
+    steps:
+      - id: key
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: echo "has_key=$([ -n "$LLM_API_KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   strix-scan:
+    needs: key-guard
+    if: needs.key-guard.outputs.has_key == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
-    # Fork PRs don't have repo secrets — skip cleanly instead of running a
-    # command guaranteed to fail on missing credentials.
-    if: ${{ github.event_name == 'workflow_dispatch' || secrets.LLM_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +51,11 @@ jobs:
         run: pipx install strix-agent==1.0.4
 
       - name: Run Strix (non-interactive)
+        # Job-level continue-on-error does NOT flip the job's check-run
+        # conclusion (PR #36's checks still showed strix-scan red), so the
+        # advisory-only steps carry their own: an external LLM agent failing must
+        # annotate, never redden the PR.
+        continue-on-error: true
         env:
           STRIX_LLM: ${{ vars.STRIX_LLM || 'openai/minimaxai/minimax-m3' }}
           LLM_API_BASE: ${{ vars.LLM_API_BASE || 'https://integrate.api.nvidia.com/v1' }}
@@ -57,6 +77,9 @@ jobs:
       # uploaded artifact instead of fabricating a findings summary in-line.
       - name: Comment with a link to the findings artifact
         if: always() && github.event_name == 'pull_request'
+        # The comment POST failed on PR #36 (token permissions) — a missing
+        # advisory comment must never redden the check (same rule as the run step).
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |

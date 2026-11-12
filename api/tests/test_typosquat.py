@@ -1,6 +1,8 @@
 """SQG007 typosquat advisory: near-miss of a popular package flagged HIGH/never-block;
 real packages, short names, and unrelated names never flagged (zero-FP bar)."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.analyzers.base import Confidence
@@ -123,8 +125,6 @@ async def test_non_manifest_file_ignored():
 # an established package, not a fresh typosquat. Fail-safe in both directions the
 # gate can fail: no created_fn wired → old behaviour (finding stays); created_fn
 # returns None (outage, unknown name, PyPI `releases` deprecation) → finding stays.
-
-from datetime import datetime, timedelta, timezone
 
 _ESTABLISHED = datetime(2018, 4, 27, tzinfo=timezone.utc)  # bleak's real first release
 
