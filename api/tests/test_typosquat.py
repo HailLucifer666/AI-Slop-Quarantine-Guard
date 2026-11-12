@@ -199,3 +199,38 @@ async def test_naive_registry_timestamp_does_not_crash_the_gate():
     ctx = _ctx({"requirements.txt": "bleak==0.22.0\n"})
     ctx["created_fn"] = pypi_shape
     assert await check_typosquat(diff, ctx) == []
+
+
+@pytest.mark.asyncio
+async def test_age_threshold_boundary_729_flags_730_suppresses():
+    # Pin the ADR-025 boundary exactly: timedelta.days floors, so now-730d has
+    # .days == 730 (suppress) and now-729d has .days == 729 (flag).
+    diff = _diff("requirements.txt", ["bleak==0.22.0"])
+
+    async def aged(days):
+        async def fn(eco, name, client):
+            return datetime.now(timezone.utc) - timedelta(days=days)
+        return fn
+
+    ctx_on = _ctx({"requirements.txt": "bleak==0.22.0\n"})
+    ctx_on["created_fn"] = await aged(730)
+    assert await check_typosquat(diff, ctx_on) == []
+    ctx_off = _ctx({"requirements.txt": "bleak==0.22.0\n"})
+    ctx_off["created_fn"] = await aged(729)
+    assert len(await check_typosquat(diff, ctx_off)) == 1
+
+
+@pytest.mark.asyncio
+async def test_raising_created_fn_keeps_the_finding():
+    # A producer that RAISES (a future parser bug, a bad override) must degrade to
+    # keep-the-finding for that candidate — never abort the analyzer and silence
+    # SQG007 for the whole diff (ADR-025's fail-safe covers raises, not just None).
+    async def explodes(ecosystem, name, client):
+        raise RuntimeError("producer bug")
+
+    diff = _diff("requirements.txt", ["reqests==1.0.0"])
+    ctx = _ctx({"requirements.txt": "reqests==1.0.0\n"})
+    ctx["created_fn"] = explodes
+    findings = await check_typosquat(diff, ctx)
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH

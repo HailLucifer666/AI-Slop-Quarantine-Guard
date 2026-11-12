@@ -7,11 +7,17 @@ forbids calling it CERTAIN or blocking on it. Findings are therefore always HIGH
 advisory, never block-eligible; the evidence names the look-alike target and asks
 the author to verify.
 
-Pure string comparison against a bundled curated list (popular_packages.py) — no
-network, so it is deterministic and fail-safe by construction. False positives are
-suppressed by three guards: the name must not itself be a popular package, must be
-long enough that a 2-edit collision is unlikely (MIN_LEN), and must land within
-MAX_DISTANCE edits of exactly the closest popular name.
+String comparison against a bundled curated list (popular_packages.py) is the
+deterministic core. When the caller wires ``created_fn`` (scan.py/worker.py inject
+a cached registry lookup), this rule ALSO performs per-candidate registry HTTP to
+learn the package's first-release date, and an established package (ADR-025
+threshold) is not flagged — that is the scan-#18 bleak fix. False positives are
+suppressed by four guards: the name must not itself be a popular package, must be
+long enough that a 2-edit collision is unlikely (MIN_LEN), must land within
+MAX_DISTANCE edits of exactly the closest popular name, and must not be an
+established registry package. Every guard fails toward keep-the-finding: no
+wiring, outage, unknown name, missing field, or a raising producer all leave the
+advisory in place — never silence, never a block.
 """
 
 import re
@@ -184,7 +190,10 @@ async def check_typosquat(diff: str, repo_context: dict) -> List[Finding]:
                 if target is None:
                     continue
                 if created_fn is not None:
-                    first_release = await created_fn(ecosystem, name, client)
+                    try:
+                        first_release = await created_fn(ecosystem, name, client)
+                    except Exception:  # noqa: BLE001 — a raising producer must degrade to
+                        first_release = None  # keep-the-finding, never abort the analyzer
                     if first_release is not None:
                         if first_release.tzinfo is None:
                             # A naive datetime (PyPI's upload_time shape, or an injected

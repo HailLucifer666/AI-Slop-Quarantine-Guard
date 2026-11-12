@@ -24,7 +24,7 @@ from app.analyzers.secrets import check_secrets
 from app.analyzers.simplify import check_simplify
 from app.analyzers.typosquat import check_typosquat
 from app.analyzers.vulns import check_vulnerabilities
-from app.cache import cached_existence, cached_license, cached_osv_batch
+from app.cache import cached_existence, cached_license, cached_osv_batch, cached_registry_created
 from app.checks import apply_block_eligibility, dedupe_findings
 from app.config import settings
 from app.coverage import (
@@ -41,7 +41,6 @@ from app.coverage import (
 )
 from app.engines import probe_all, rules_missing_an_engine
 from app.grouping import group_findings, summarize_groups
-from app.cache import cached_existence, cached_license, cached_osv_batch, cached_registry_created
 from app.synthetic_diff import build_synthetic_diff
 
 logger = logging.getLogger("scan")

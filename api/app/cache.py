@@ -24,6 +24,7 @@ from app.queue import get_redis
 from app.registries import (
     Existence,
     check_exists as _check_exists,
+    normalize_pypi,
     registry_created_at as _registry_created_at,
 )
 
@@ -67,7 +68,11 @@ async def cached_registry_created(
 ) -> Optional[datetime]:
     """``registries.registry_created_at`` with a Redis cache. None (outage, unknown
     name, field missing) is NEVER cached — same rule as existence UNKNOWN: caching
-    an non-answer would persist a transient gap into a stale "can't verify"."""
+    an non-answer would persist a transient gap into a stale "can't verify".
+    PyPI names are normalized in the key, mirroring the registry URL: ``Bleak`` and
+    ``bleak`` alias one registry body and must alias one cache entry."""
+    if ecosystem == "pypi":
+        name = normalize_pypi(name)
     key = f"sqg:created:{ecosystem}:{name}"
     hit = await _get(key)
     if hit is not None:
