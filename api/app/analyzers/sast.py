@@ -49,6 +49,11 @@ _CWE_BY_LABEL = {
     "document.write()": ["CWE-79"],
 }
 
+# One name for the weak-hash label — it is used by the CWE map, the pattern table
+# and the usedforsecurity guard; a hand-typed copy in each place drifts (review
+# NIT, 2026-11-13).
+_WEAK_HASH_LABEL = "weak hash (md5/sha1)"
+
 
 def _cwe_for(label: str) -> list:
     return list(_CWE_BY_LABEL.get(label, []))
@@ -70,8 +75,22 @@ _PY_PATTERNS: list[tuple[str, Confidence, re.Pattern]] = [
     ),
     ("insecure deserialization (pickle)", Confidence.MEDIUM, re.compile(r"\bpickle\.loads?\s*\(")),
     ("unsafe yaml.load()", Confidence.MEDIUM, re.compile(r"\byaml\.load\s*\((?!.*SafeLoader)")),
-    ("weak hash (md5/sha1)", Confidence.MEDIUM, re.compile(r"\bhashlib\.(?:md5|sha1)\s*\(")),
+    (_WEAK_HASH_LABEL, Confidence.MEDIUM, re.compile(r"\bhashlib\.(?:md5|sha1)\s*\(")),
 ]
+
+
+def _flag_suppresses(content: str, m: re.Match, cstart: int, lang) -> bool:
+    """True when the matched weak-hash call carries its own `usedforsecurity=False`
+    in code: the flag must sit in the code portion (a trailing comment mentioning
+    it is prose, not a flag), outside a string literal, and at/after the match
+    start (a flagged sibling call on a compound line doesn't cover this one)."""
+    code_end = cstart if cstart != -1 else len(content)
+    idx = content.find("usedforsecurity=False", 0, code_end)
+    while idx != -1:
+        if idx >= m.start() and not inside_string_literal(content, idx, lang):
+            return True
+        idx = content.find("usedforsecurity=False", idx + 1)
+    return False
 
 _JS_PATTERNS: list[tuple[str, Confidence, re.Pattern]] = [
     ("use of eval()", Confidence.HIGH, re.compile(r"(?<![.\w])eval\s*\(")),
@@ -175,11 +194,43 @@ async def check_sast(diff: str, repo_context: dict) -> List[Finding]:
                     continue
                 if label == "unsafe yaml.load()" and _safeloader_follows(added, idx):
                     continue  # SafeLoader arrives a couple lines later — a safe multi-line call
-                if label == "weak hash (md5/sha1)" and "usedforsecurity=False" in content:
-                    # hashlib's own flag says this hash protects nothing (git blob
-                    # hashing, cache keys) — scan #20 finding 9 flagged exactly that
-                    # shape. Same line only: a multi-line call with the flag out of
-                    # sight still surfaces (fails safe toward keep-the-finding).
+                if label == _WEAK_HASH_LABEL:
+                    # A weak-hash call carrying its own `usedforsecurity=False` IN CODE
+                    # protects nothing (git blob hashing, cache keys) — scan #20 finding
+                    # 9. Guard review 2026-11-13: the flag must belong to the matched
+                    # call — in the code portion (not a trailing comment), not inside a
+                    # string literal, and at/after the match start (so a flagged sibling
+                    # call on a compound line can't silence an unflagged one). Every
+                    # miss fails safe toward keep-the-finding; each call on the line is
+                    # judged on its own so a flagged md5 never suppresses an unflagged sha1.
+                    emitted = False
+                    search_from = 0
+                    while True:
+                        wm = pattern.search(content, search_from)
+                        if wm is None:
+                            break
+                        search_from = wm.end()
+                        if _flag_suppresses(content, wm, cstart, lang):
+                            continue
+                        findings.append(
+                            Finding(
+                                category="sast",
+                                confidence=confidence,
+                                block_eligible=False,
+                                file_path=path,
+                                line_start=line,
+                                line_end=line,
+                                message=f"{label} at line {line}: '{content.strip()[:80]}'",
+                                evidence=Evidence(snippet=content.strip()),
+                                tool="regex",
+                                rule_id=RULE_ID,
+                                cwe=_cwe_for(label),
+                            )
+                        )
+                        emitted = True
+                        break
+                    if emitted:
+                        matched_line = True
                     continue
                 findings.append(
                     Finding(
