@@ -8,11 +8,12 @@ cases at the bottom are the words the boundary rule must NOT swallow (contest,
 latest, testutils, prospects, evaluation, testflight) — a path classifier that
 downgrades real source files would hide real leaks.
 
-Mutation probes (2026-11-12, run and restored): ``in_test_path`` → ``return False``
-turned 25 tests red across all three consumers (the 17 match-cases here, the three
-SQG002 path-downgrades plus the tests-dir pin, and the SQG001 fixture-path
-downgrade); disabling the ``evals?`` token reded exactly the two evals cases.
-The classifier is load-bearing everywhere it is consumed.
+Mutation probes (run and restored; the 2026-11-12 full-disable probe — ``in_test_path``
+→ ``return False`` — turned exactly **29** tests red across the four consumer files:
+the 20 match-cases here, plus 6 SQG002 consumer tests (five path-downgrades and the
+pre-existing test-path advisory pin) and 3 SQG001/manifests fixture-path tests.
+A second probe disabled just the ``evals?`` token and reded exactly the two evals
+match-cases. The classifier is load-bearing everywhere it is consumed.
 """
 
 import pytest
@@ -34,6 +35,8 @@ from app.analyzers.paths import in_test_path
         "src/module.spec.tsx",
         "src/__tests__/auth.ts",
         "packages/a/__mocks__/b.ts",
+        "src/__snapshots__/ui.ts",  # vitest/jest snapshot artifacts
+        "cypress/integration/login.ts",  # cypress test infra
         "e2e/login.spec.ts",
         "test-data/cases.json",
         "testdata/cases.json",

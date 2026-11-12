@@ -245,17 +245,56 @@ _PKG_DIFF = """\
 @pytest.mark.asyncio
 async def test_workspace_declared_name_downgraded():
     # A public-registry 404 for a name THIS repo declares is a workspace-internal
-    # package, not a hallucination (scan-mode set arrives via repo_context).
+    # package, not a hallucination (scan-mode set arrives via repo_context,
+    # per-ecosystem: an npm declaration answers only npm questions).
     files = {"app/package.json": '{"name": "app", "dependencies": {"helper": "1.0.0"}}'}
     ctx = _ctx(files, {"helper": Existence.MISSING})
-    ctx["workspace_names"] = {"helper"}
+    ctx["workspace_names"] = {"npm": {"helper"}}
     findings = await check_dependencies(_PKG_DIFF, ctx)
 
     assert len(findings) == 1
     f = findings[0]
     assert f.confidence is Confidence.HIGH
     assert f.block_eligible is False
-    assert "declared by this repo" in f.message
+    assert "manifest in this repo declares" in f.message
+
+
+@pytest.mark.asyncio
+async def test_workspace_downgrade_is_ecosystem_scoped():
+    # Review finding (2026-11-12): an npm declaration answers npm questions only.
+    # A PyPI 404 of the same name is still a hallucinated package and must block.
+    files = {"requirements.txt": "helper==1.0.0\n"}
+    diff = (
+        "--- a/requirements.txt\n+++ b/requirements.txt\n"
+        "@@ -1,1 +1,2 @@\n requests==2.31.0\n+helper==1.0.0\n"
+    )
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    ctx["workspace_names"] = {"npm": {"helper"}}
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.CERTAIN
+    assert f.block_eligible is True
+
+
+@pytest.mark.asyncio
+async def test_pypi_name_normalization_matches_declared_name():
+    # Review finding (2026-11-12): PEP 503 normalization — a pyproject declaring
+    # `my_lib` while the dependency spells it `my-lib` is the repo's own package
+    # either way; the raw-string membership test used to block on it.
+    files = {"requirements.txt": "my-lib==0.1.0\n"}
+    diff = (
+        "--- a/requirements.txt\n+++ b/requirements.txt\n"
+        "@@ -1,1 +1,2 @@\n requests==2.31.0\n+my-lib==0.1.0\n"
+    )
+    ctx = _ctx(files, {"my-lib": Existence.MISSING})
+    ctx["workspace_names"] = {"pypi": {"my_lib"}}
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
 
 
 @pytest.mark.asyncio
@@ -296,6 +335,32 @@ async def test_fixture_path_manifest_downgraded():
     assert f.confidence is Confidence.HIGH
     assert f.block_eligible is False
     assert "test/fixture path" in f.message
+
+
+@pytest.mark.asyncio
+async def test_fixture_declared_name_does_not_legitimize_production_404():
+    # Review finding (2026-11-12): a fixture manifest's declared name must not feed
+    # the workspace rung — a production-path 404 of that name is still a block.
+    # The fixture manifest itself is skipped during collection (its own 404, if it
+    # had one, is carried by the fixture-path rung alone).
+    files = {
+        "app/package.json": '{"dependencies": {"helper": "1.0.0"}}',
+        "tests/fixtures/demo/package.json": '{"name": "helper"}',
+    }
+    diff = (
+        _PKG_DIFF
+        + "--- a/tests/fixtures/demo/package.json\n"
+        + "+++ b/tests/fixtures/demo/package.json\n"
+        + "@@ -0,0 +1,1 @@\n"
+        + '+{"name": "helper"}\n'
+    )
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.CERTAIN
+    assert f.block_eligible is True
 
 
 @pytest.mark.asyncio

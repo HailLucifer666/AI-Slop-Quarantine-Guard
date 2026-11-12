@@ -21,6 +21,8 @@ from app.pinned import (
     parse_packages_lock_json,
     parse_pom_xml,
 )
+from app.analyzers.paths import in_test_path  # noqa: E402 — shared classifier; paths imports nothing, no cycle
+from app.registries import normalize_pypi
 
 # Map a manifest basename to the ecosystem whose registry should answer for it.
 #
@@ -159,20 +161,30 @@ def npmrc_private_scopes(content: str) -> set[str]:
     return {m.group(1) for m in _NPMRC_SCOPE_RE.finditer(content)}
 
 
-def collect_workspace_names(files: Dict[str, str]) -> set[str]:
-    """Names this repository itself declares as packages.
+def collect_workspace_names(files: Dict[str, str]) -> Dict[str, set[str]]:
+    """Names this repository itself declares as packages, per ecosystem.
 
     Why this exists: a public-registry 404 for a name the repo declares is a
     workspace-internal package (npm workspaces / monorepo tooling), not a
     hallucinated dependency — SQG001 must never block on it (derived from the
-    manifests' own ``name`` fields, never a hand-kept list; scan #20's
-    ``evals/triage-finding`` fixture is the incident that motivated the
-    fixture-path half, this is the workspace half).
+    manifests' own ``name`` fields, never a hand-kept list).
 
-    ``workspaces``/``packages`` globs are deliberately NOT parsed: a glob can
-    only point at directories that themselves carry a manifest, and those
-    manifests' names are already collected here — parsing globs would add
-    nothing to the name set.
+    Returns ``{"npm": {...}, "pypi": {...}}`` — the registry answers per
+    ecosystem, so the downgrade must too: an npm-declared ``helper`` says
+    nothing about a PyPI package named ``helper`` (review finding, 2026-11-12).
+
+    Manifests under test/fixture paths are skipped: a fixture package.json
+    declaring an unpublished name must not legitimize a production-path 404 of
+    that name — the fixture rung (the path itself) already carries that case.
+    PyPI names are stored PEP 503-normalized (``normalize_pypi``), because the
+    registry normalizes and both spellings of the repo's own name are common.
+
+    Coverage is ``package.json`` → npm and ``pyproject.toml`` → pypi.
+    Cargo/poetry workspaces are not collected: their internal dependencies are
+    path/git references, filtered before any registry lookup, so a name set
+    would never be consulted. ``workspaces``/``packages`` globs are likewise
+    not parsed: a glob can only point at directories that themselves carry a
+    manifest, and those manifests' names are already collected here.
 
     Malformed files are skipped: collection is best-effort and one broken
     manifest must not void the set (the registry check answers per-name anyway).
@@ -180,10 +192,14 @@ def collect_workspace_names(files: Dict[str, str]) -> set[str]:
     manifests the diff touches, so an un-touched workspace package keeps its
     CERTAIN finding (fail-safe: absent evidence never downgrades).
     """
-    names: set[str] = set()
+    declared: Dict[str, set[str]] = {}
     for path, content in files.items():
-        base = path.replace("\\", "/").rsplit("/", 1)[-1]
+        normalized_path = path.replace("\\", "/")
+        if in_test_path(normalized_path):
+            continue  # fixture-declared names never legitimize a production-path 404
+        base = normalized_path.rsplit("/", 1)[-1]
         if base == "package.json":
+            ecosystem = "npm"
             try:
                 data = json.loads(content)
             except ValueError:
@@ -191,8 +207,9 @@ def collect_workspace_names(files: Dict[str, str]) -> set[str]:
             if isinstance(data, dict):
                 name = data.get("name")
                 if isinstance(name, str) and name.strip():
-                    names.add(name)
+                    declared.setdefault(ecosystem, set()).add(name)
         elif base == "pyproject.toml":
+            ecosystem = "pypi"
             try:
                 data = tomllib.loads(content)
             except tomllib.TOMLDecodeError:
@@ -200,8 +217,8 @@ def collect_workspace_names(files: Dict[str, str]) -> set[str]:
             project = data.get("project") if isinstance(data, dict) else None
             name = project.get("name") if isinstance(project, dict) else None
             if isinstance(name, str) and name.strip():
-                names.add(name)
-    return names
+                declared.setdefault(ecosystem, set()).add(normalize_pypi(name))
+    return declared
 
 
 def extract_dependency_names(filename: str, content: str) -> List[str]:

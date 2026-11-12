@@ -19,8 +19,8 @@ import re
 # ``contest.py``, ``latest.md`` and ``testutils/`` out — "test" is only the
 # test token when a delimiter or the segment edge says so.
 _TEST_TOKEN = re.compile(
-    r"(?:^|[/_.-])(?:tests?|testing|testdata|__tests__|fixtures?|mocks?|"
-    r"__mocks__|specs?|e2e|evals?|examples?|samples?)(?:$|[/_.-])",
+    r"(?:^|[/_.-])(?:tests?|testing|testdata|__tests__|__snapshots__|cypress|fixtures?|"
+    r"mocks?|__mocks__|specs?|e2e|evals?|examples?|samples?)(?:$|[/_.-])",
     re.IGNORECASE,
 )
 

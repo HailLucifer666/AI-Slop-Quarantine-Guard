@@ -248,12 +248,22 @@ def test_collect_workspace_names_from_package_json():
         "app/package.json": '{"name": "app"}',
         "packages/helper/package.json": '{"name": "helper"}',
     }
-    assert collect_workspace_names(files) == {"app", "helper"}
+    assert collect_workspace_names(files) == {"npm": {"app", "helper"}}
 
 
-def test_collect_workspace_names_from_pyproject():
-    files = {"pyproject.toml": '[project]\nname = "my-tool"\n'}
-    assert collect_workspace_names(files) == {"my-tool"}
+def test_collect_workspace_names_from_pyproject_is_pypi_normalized():
+    # PEP 503: the registry normalizes case and [-_.] runs, so the stored name must
+    # too — a dependency spelled `my-lib` against a declared `my_lib` is the same
+    # package (review finding, 2026-11-12).
+    files = {"pyproject.toml": '[project]\nname = "my_lib"\n'}
+    assert collect_workspace_names(files) == {"pypi": {"my-lib"}}
+
+
+def test_collect_workspace_names_skips_fixture_manifests():
+    # A fixture manifest's declared name must not legitimize a production-path 404
+    # of that name (review finding, 2026-11-12) — the fixture rung carries it.
+    files = {"tests/fixtures/demo/package.json": '{"name": "helper"}'}
+    assert collect_workspace_names(files) == {}
 
 
 def test_collect_workspace_names_skips_malformed_and_non_manifests():
@@ -267,4 +277,4 @@ def test_collect_workspace_names_skips_malformed_and_non_manifests():
         "lib/math.ts": 'const name = "decoy"',
         "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n",
     }
-    assert collect_workspace_names(files) == set()
+    assert collect_workspace_names(files) == {}

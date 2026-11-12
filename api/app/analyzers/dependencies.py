@@ -25,7 +25,7 @@ from app.manifests import (
     manifest_ecosystem,
     npmrc_private_scopes,
 )
-from app.registries import Existence, check_exists
+from app.registries import Existence, check_exists, normalize_pypi
 
 from .base import Confidence, Evidence, Finding
 from .paths import in_test_path
@@ -116,8 +116,8 @@ def _workspace_finding(name: str, ecosystem: str, path: str, line: int, snippet:
         line_start=line,
         line_end=line,
         message=(
-            f"'{name}' was not found on the public {ecosystem} registry, but it is "
-            f"declared by this repo — a workspace-internal package. Advisory only."
+            f"'{name}' was not found on the public {ecosystem} registry, but a manifest "
+            f"in this repo declares that name — likely a workspace-internal package. Advisory only."
         ),
         evidence=Evidence(snippet=snippet.strip()),
         tool=f"registry:{ecosystem}",
@@ -181,8 +181,16 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
             content = await fetch_file(path)
             if content:
                 manifest_contents[path] = content
-        declared: set[str] = set(repo_context.get("workspace_names") or ())
-        declared |= collect_workspace_names(manifest_contents)
+        declared_all: Dict[str, set[str]] = dict(repo_context.get("workspace_names") or {})
+        for eco, names in collect_workspace_names(manifest_contents).items():
+            declared_all.setdefault(eco, set()).update(names)
+        # PyPI normalizes names (PEP 503: case, [-_.] runs) on the registry side, so
+        # the membership test must too: a repo declaring `my_lib` while depending on
+        # `my-lib` is the repo's own package either way (review finding, 2026-11-12).
+        declared_needles = {
+            eco: {normalize_pypi(n) for n in names} if eco == "pypi" else names
+            for eco, names in declared_all.items()
+        }
 
         for path, added in added_by_file.items():
             ecosystem = manifest_ecosystem(path)
@@ -219,18 +227,20 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
                     # clean 404 on a public path with none of these stays CERTAIN.
                     if in_test_path(path):
                         findings.append(_fixture_path_finding(name, ecosystem, path, line, snippet))
-                    elif name in declared:
-                        findings.append(_workspace_finding(name, ecosystem, path, line, snippet))
                     else:
-                        is_private = pip_private or (
-                            ecosystem == "npm"
-                            and npmrc_scopes
-                            and any(name.startswith(f"{scope}/") for scope in npmrc_scopes)
-                        )
-                        if is_private:
-                            findings.append(_private_index_finding(name, ecosystem, path, line, snippet))
+                        needle = normalize_pypi(name) if ecosystem == "pypi" else name
+                        if needle in declared_needles.get(ecosystem, set()):
+                            findings.append(_workspace_finding(name, ecosystem, path, line, snippet))
                         else:
-                            findings.append(_missing_finding(name, ecosystem, path, line, snippet))
+                            is_private = pip_private or (
+                                ecosystem == "npm"
+                                and npmrc_scopes
+                                and any(name.startswith(f"{scope}/") for scope in npmrc_scopes)
+                            )
+                            if is_private:
+                                findings.append(_private_index_finding(name, ecosystem, path, line, snippet))
+                            else:
+                                findings.append(_missing_finding(name, ecosystem, path, line, snippet))
                 elif result is Existence.UNKNOWN:
                     findings.append(_unknown_finding(name, ecosystem, path, line, snippet))
 
