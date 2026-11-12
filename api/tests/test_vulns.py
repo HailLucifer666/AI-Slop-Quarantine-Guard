@@ -353,6 +353,106 @@ async def test_osv_outage_on_a_new_ecosystem_still_fails_safe():
     assert await check_vulnerabilities(diff, ctx, **kw) == []
 
 
+# --- severity + CVSS vector surfacing (scan #20: Low shown as HIGH) ----------
+# Probe (2026-11-13, run and restored): unwiring cvss_vector reds exactly the two
+# vector-asserting tests; the honest-null test passes on both shapes either way.
+# Premise (Step 0, 2026-11-12): the live OSV record for GHSA-474x-hrwr-fgx4
+# carries database_specific.severity LOW + a CVSS_V3 vector; scan #20 stored null
+# because the running worker predates the severity-population code. The web
+# FindingCard already renders finding.severity when present, so no UI change
+# rides here; its vitest pin lives with the dashboard branch's suite.
+
+@pytest.mark.asyncio
+async def test_ghsa_shape_surfaces_advisory_severity_and_vector():
+    # Scan #20's fast-xml-parser record, verified live 2026-11-12: OSV carries
+    # database_specific.severity LOW plus a CVSS_V3 vector, patched in 5.12.0.
+    # The finding must surface both — never the confidence label in severity's place.
+    vulns = [{
+        "id": "GHSA-474x-hrwr-fgx4",
+        "database_specific": {"severity": "LOW"},
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"}],
+        "affected": [{"ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "5.12.0"}]}]}],
+    }]
+    diff = _diff("package-lock.json", ['"node_modules/fast-xml-parser": {', '"version": "5.11.1"'])
+    content = '{"lockfileVersion": 3, "packages": {"": {}, "node_modules/fast-xml-parser": {"version": "5.11.1"}}}'
+    ctx, kw = _ctx({"package-lock.json": content}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "low"
+    assert f.cvss_vector == "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+
+
+@pytest.mark.asyncio
+async def test_vector_only_record_keeps_honest_null_severity():
+    # PYSEC/Go-shaped records carry only the severity[] array — no label exists, so
+    # severity stays null and the vector is stored verbatim. A vector must never
+    # masquerade as the advisory's severity label (that would be our own judgement).
+    vulns = [{
+        "id": "PYSEC-2026-0001",
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+    }]
+    diff = _diff("requirements.txt", ["requests==2.19.0"])
+    ctx, kw = _ctx({"requirements.txt": "requests==2.19.0\n"}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity is None
+    assert f.cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+
+@pytest.mark.asyncio
+async def test_no_severity_data_stays_null():
+    vulns = [{"id": "GHSA-plain", "affected": []}]
+    diff = _diff("requirements.txt", ["requests==2.19.0"])
+    ctx, kw = _ctx({"requirements.txt": "requests==2.19.0\n"}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    assert findings[0].severity is None
+    assert findings[0].cvss_vector is None
+
+
+@pytest.mark.asyncio
+async def test_vector_pairs_with_the_advisory_whose_label_won():
+    # Review probe (2026-11-13): first-vector-wins paired one advisory's vector
+    # with another's severity label. The vector must come from the advisory whose
+    # label won, so the two rendered fields describe the same source.
+    vulns = [
+        {
+            "id": "GHSA-low-first",
+            "database_specific": {"severity": "LOW"},
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"}],
+        },
+        {
+            "id": "GHSA-critical-second",
+            "database_specific": {"severity": "CRITICAL"},
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}],
+        },
+    ]
+    diff = _diff("requirements.txt", ["requests==2.19.0"])
+    ctx, kw = _ctx({"requirements.txt": "requests==2.19.0\n"}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "critical"
+    assert f.cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+
+
+@pytest.mark.asyncio
+async def test_vector_acceptance_matrix():
+    # Gate C on _first_vector: CVSS_V4 accepted, numeric scores skipped, non-CVSS
+    # types skipped, score strings without the CVSS: prefix skipped.
+    from app.analyzers.vulns import _first_vector
+    cases = [
+        ({"severity": [{"type": "CVSS_V4", "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N"}]}, "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N"),
+        ({"severity": [{"type": "CVSS_V3", "score": 7.5}]}, None),  # numeric score, not a vector string
+        ({"severity": [{"type": "OTHER", "score": "CVSS:3.1/AV:N/AC:L"}]}, None),  # non-CVSS type
+        ({"severity": [{"type": "CVSS_V3", "score": "7.5"}]}, None),  # no CVSS: prefix
+        ({"severity": "CVSS:3.1/AV:N"}, None),  # whole array not a list of dicts
+    ]
+    for vuln, expected in cases:
+        assert _first_vector(vuln) == expected, vuln
+
 # --- lockfile evidence anchor (scan #18: wrong entry cited) ------------------
 # Probe (2026-11-13, run and restored): disabling _anchored_lock_line reds both
 # tests below - with the walker gone, the findings re-anchored onto their own
