@@ -62,6 +62,20 @@ def _describe(result: dict) -> str:
 async def test_fixture_matches_ground_truth(expectation: Expectation):
     """Each fixture finds exactly what it should, and nothing it shouldn't."""
     result = await _scan_fixture(expectation.fixture)
+    # A rule that DIED mid-run produces zero findings too — indistinguishable from
+    # a silent rule by counts alone. The corpus must hear an analyzer dying: the
+    # established-lookalike fixture passed vacuously through an ERRORED SQG007 on
+    # 2026-11-13 (naive PyPI timestamp crashed the gate) before this assert existed.
+    dead = [
+        row["rule_id"] for row in result["coverage"]["rules"]
+        if row["status"] in ("errored", "timed_out")
+    ]
+    assert not dead, (
+        f"{expectation.fixture}: rule(s) {dead} died mid-run (errored/timed_out) - "
+        f"zero findings from a dead analyzer would read as a pass. "
+        f"(not_run_unsupported is legitimate here: small fixtures give most "
+        f"analyzers nothing to read.)"
+    )
     counts = _counts(result)
     detail = _describe(result)
 

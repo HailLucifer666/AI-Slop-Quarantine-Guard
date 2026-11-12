@@ -24,7 +24,7 @@ from app.analyzers.secrets import check_secrets
 from app.analyzers.simplify import check_simplify
 from app.analyzers.typosquat import check_typosquat
 from app.analyzers.vulns import check_vulnerabilities
-from app.cache import cached_existence, cached_license, cached_osv_batch
+from app.cache import cached_existence, cached_license, cached_osv_batch, cached_registry_created
 from app.checks import apply_block_eligibility, dedupe_findings
 from app.config import settings
 from app.coverage import (
@@ -235,9 +235,12 @@ async def run_scan(
     check_exists = overrides.get("check_exists", cached_existence)
     query_batch = overrides.get("query_batch", cached_osv_batch)
     fetch_license = overrides.get("fetch_license", cached_license)
+    created_fn = overrides.get("created_fn", cached_registry_created)
     repo_context = {
         "repo": "", "head_sha": "", "token": "",
         "fetch_file": _local_fetch_one(files), "check_exists": check_exists,
+        # First-release ages for SQG007's established-package gate (ADR-025).
+        "created_fn": created_fn,
         # Names this repo itself declares (workspace-internal packages) — SQG001
         # downgrades a public-registry 404 for one of these instead of blocking.
         "workspace_names": collect_workspace_names(files),

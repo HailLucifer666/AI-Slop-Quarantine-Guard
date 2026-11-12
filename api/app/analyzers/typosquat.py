@@ -7,15 +7,24 @@ forbids calling it CERTAIN or blocking on it. Findings are therefore always HIGH
 advisory, never block-eligible; the evidence names the look-alike target and asks
 the author to verify.
 
-Pure string comparison against a bundled curated list (popular_packages.py) — no
-network, so it is deterministic and fail-safe by construction. False positives are
-suppressed by three guards: the name must not itself be a popular package, must be
-long enough that a 2-edit collision is unlikely (MIN_LEN), and must land within
-MAX_DISTANCE edits of exactly the closest popular name.
+String comparison against a bundled curated list (popular_packages.py) is the
+deterministic core. When the caller wires ``created_fn`` (scan.py/worker.py inject
+a cached registry lookup), this rule ALSO performs per-candidate registry HTTP to
+learn the package's first-release date, and an established package (ADR-025
+threshold) is not flagged — that is the scan-#18 bleak fix. False positives are
+suppressed by four guards: the name must not itself be a popular package, must be
+long enough that a 2-edit collision is unlikely (MIN_LEN), must land within
+MAX_DISTANCE edits of exactly the closest popular name, and must not be an
+established registry package. Every guard fails toward keep-the-finding: no
+wiring, outage, unknown name, missing field, or a raising producer all leave the
+advisory in place — never silence, never a block.
 """
 
 import re
-from typing import Awaitable, Callable, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, List, Optional
+
+import httpx
 
 from app import github_client
 from app.diff import parse_diff
@@ -25,6 +34,15 @@ from .base import Confidence, Evidence, Finding
 from .popular_packages import POPULAR_BY_ECOSYSTEM
 
 RULE_ID = "SQG007"
+
+# A look-alike whose first registry release predates this is an established
+# package, not a fresh typosquat, and is not flagged when registry age is
+# available (ADR-025). Evidence for the value: bleak — the scan-#18 false
+# positive — was first published 2018-04-27 (8.5 years, 61 releases, still
+# actively maintained as of 2026-11-13), while historical typosquat campaigns
+# publish and strike within days-to-weeks; anything younger, or with unknown
+# age, keeps the finding (fail-safe).
+_ESTABLISHED_AGE_DAYS = 730
 
 # A name below this floor is too short for edit distance to mean anything at all
 # (nearly everything is within 2 edits of a 1-2 char string).
@@ -127,7 +145,13 @@ async def check_typosquat(diff: str, repo_context: dict) -> List[Finding]:
     """Flag PR-introduced dependencies that look like typos of popular packages.
 
     repo_context keys mirror SQG001: repo, head_sha, token, and an optional
-    ``fetch_file`` async (path) -> content|None for injection/tests.
+    ``fetch_file`` async (path) -> content|None for injection/tests, plus an
+    optional ``created_fn`` async (ecosystem, name, client) -> datetime|None
+    (scan.py/worker.py inject the cached registry-age lookup). When ``created_fn``
+    is wired, a look-alike whose first release predates _ESTABLISHED_AGE_DAYS is an
+    established package, not a fresh typosquat, and is not flagged — that is the
+    scan-#18 bleak fix (ADR-025). Fail-safe: no created_fn wired, or None returned
+    (outage, unknown name, PyPI ``releases`` deprecation) → the finding STAYS.
     """
     added_by_file: dict[str, list[tuple[int, str]]] = {}
     for path, line, content in parse_diff(diff):
@@ -140,28 +164,49 @@ async def check_typosquat(diff: str, repo_context: dict) -> List[Finding]:
         "fetch_file",
         lambda path: github_client.fetch_file_content(repo, path, head_sha, token),
     )
+    created_fn: Optional[Callable[[str, str, Any], Awaitable[Optional[datetime]]]] = repo_context.get(
+        "created_fn"
+    )
 
     findings: List[Finding] = []
-    for path, added in added_by_file.items():
-        ecosystem = manifest_ecosystem(path)
-        if ecosystem not in POPULAR_BY_ECOSYSTEM:
-            continue
-        body = await fetch_file(path)
-        if not body:
-            continue  # can't parse → stay silent (protects zero-FP bar)
+    async with httpx.AsyncClient(timeout=10) as client:
+        for path, added in added_by_file.items():
+            ecosystem = manifest_ecosystem(path)
+            if ecosystem not in POPULAR_BY_ECOSYSTEM:
+                continue
+            body = await fetch_file(path)
+            if not body:
+                continue  # can't parse → stay silent (protects zero-FP bar)
 
-        seen: set[str] = set()
-        for name in extract_dependency_names(path, body):
-            if name in seen:
-                continue
-            line_no = _name_present(name, added)
-            if line_no is None:
-                continue  # declared but not touched in this PR
-            seen.add(name)
-            target = _closest_popular(ecosystem, _normalize(ecosystem, name))
-            if target is None:
-                continue
-            snippet = next(c for ln, c in added if ln == line_no)
-            findings.append(_finding(name, target, path, line_no, snippet))
+            seen: set[str] = set()
+            for name in extract_dependency_names(path, body):
+                if name in seen:
+                    continue
+                line_no = _name_present(name, added)
+                if line_no is None:
+                    continue  # declared but not touched in this PR
+                seen.add(name)
+                target = _closest_popular(ecosystem, _normalize(ecosystem, name))
+                if target is None:
+                    continue
+                if created_fn is not None:
+                    try:
+                        first_release = await created_fn(ecosystem, name, client)
+                    except Exception:  # noqa: BLE001 — a raising producer must degrade to
+                        first_release = None  # keep-the-finding, never abort the analyzer
+                    if first_release is not None:
+                        if first_release.tzinfo is None:
+                            # A naive datetime (PyPI's upload_time shape, or an injected
+                            # caller) must be normalized HERE — the subtraction site —
+                            # because aware-minus-naive raises TypeError and would kill
+                            # the whole analyzer (probed 2026-11-13).
+                            first_release = first_release.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - first_release).days
+                        if age_days >= _ESTABLISHED_AGE_DAYS:
+                            # An established, still-published package whose name merely
+                            # resembles a popular one (bleak vs black) — not a fresh squat.
+                            continue
+                snippet = next(c for ln, c in added if ln == line_no)
+                findings.append(_finding(name, target, path, line_no, snippet))
 
     return findings

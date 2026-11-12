@@ -538,3 +538,22 @@ Downgrades are detector-side, derived, and layered — most-specific intent sign
 **Known limit (recorded, not fixed):** the detector validates no token checksums (prefix+length regexes only; AWS AKIA is the only pattern with a public checksum algorithm), so a real leak in a test folder surfaces as HIGH advisory rather than CERTAIN. Real leaks do land in test folders — they are surfaced, never silenced.
 
 **Residual classes of the path classifier (probed 2026-11-12, accepted, not fixed):** ordinary production directories whose names contain delimited test tokens are downgraded too — `src/ab-test/`, `src/ab_tests/` (A/B-testing features), `migrations/002_add_tests_table.py`, `api/e2e-monitor/` (production monitoring), `src/patent-samples/`. Same tradeoff as path steering, but these are names nobody chose in order to steer — the cost is advisory-only downgrades, never silencing. Still-unmatched fixture carriers: digit-suffixed segments (`tests2/`) and CamelCase fixture holders (`TestConstants.kt`, `MockResponses.java`) where no delimiter precedes the token — Java/Kotlin repos are the most exposed; widening the vocabulary to those shapes is deferred until a real scan shows the miss.
+
+---
+
+## ADR-025: SQG007 Established-Package Gate (Registry Age)
+
+**Date:** 2026-11-13  
+**Status:** ACCEPTED
+
+**Context:**  
+Scan #18 (Aether BLE) produced the scan's only false positive: SQG007 flagged `bleak` as a typosquat of `black` — two Levenshtein edits apart. bleak is the standard cross-platform BLE library (hbldh/bleak, MIT, first PyPI release **2018-04-27**, verified live 2026-11-13; 61 releases, still actively maintained). A near-look-alike heuristic with no legitimacy signal cannot tell an established package from a fresh squat. A hand-allowlist of bleak was rejected: it is the Gate-D failure shape — the next legitimate look-alike name needs another hand-edit.
+
+**Decision:**  
+A derived legitimacy signal: the package's **first-release date from its own registry**, parsed from the same response bodies the existence check already downloads (PyPI JSON `releases` upload times, npm packument `time.created`, crates `crate.created_at`) — no new endpoint, cached like existence (`cached_registry_created`, None never cached). When the age is known and ≥ **730 days** (ADR'd value: historical typosquat campaigns publish and strike within days-to-weeks; an 8.5-year-old package is categorically not one; anything younger or undated keeps the finding), SQG007 does not flag.
+
+**Fail-safe direction (both ways the gate can fail):** no `created_fn` wired → pre-gate behaviour (finding stays); registry outage, unknown name, or the field missing → None → **finding stays**. Age data going quietly missing must never turn suppression on. PyPI's project-level `releases` key is deprecated by announcement — its disappearance degrades to "age unknown", which is recorded in CHECKS_CATALOG.
+
+**Known limit (recorded):** an attacker can publish a look-alike and wait out the threshold. Acceptable because SQG007 is advisory-only and never blocks; the age signal is a precision tool against the dominant fresh-squat shape, not a security guarantee.
+
+**Wiring:** `scan.py` and `worker.py` inject `created_fn` (cached) into `repo_context`; direct callers without the key keep pre-gate behaviour. The corpus is the loud guard against wiring drift: `established-lookalike` (bleak must stay silent) and `fresh-lookalike` (`reqests` must stay flagged) run through the real `run_scan` with replayed registry facts verified live 2026-11-13 (bleak HTTP 200, reqests HTTP 404).

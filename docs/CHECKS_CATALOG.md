@@ -17,7 +17,7 @@
 > | SQG004 | Live OSV.dev HTTP API (`analyzers/vulns.py`) over pypi, npm, crates, go, maven, rubygems, packagist, nuget | Trivy, osv-scanner |
 > | SQG005 | PyPI / npm registry license metadata + `composer.lock` declared licenses (`analyzers/licenses.py`) | Trivy, Syft |
 > | SQG006 | Curated regex, Python + JavaScript only (`analyzers/sast.py`) | Semgrep |
-> | SQG007 | Edit distance against a curated popular-package list | — |
+> | SQG007 | Edit distance against a curated popular-package list + registry-age legitimacy gate (ADR-025) | — |
 > | SQG009 | Python `ast` rewrite detection (`analyzers/simplify.py`) | tree-sitter for JS/TS |
 >
 > Each check reports its own coverage at runtime (`api/app/coverage.py`), and a scan states

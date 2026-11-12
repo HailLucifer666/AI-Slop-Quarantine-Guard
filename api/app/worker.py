@@ -24,7 +24,7 @@ from app.analyzers.sast import check_sast
 from app.analyzers.licenses import check_licenses
 from app.analyzers.typosquat import check_typosquat
 from app.analyzers.simplify import check_simplify
-from app.cache import cached_existence, cached_license, cached_osv_batch
+from app.cache import cached_existence, cached_license, cached_osv_batch, cached_registry_created
 from app.analyzers.base import finalize
 from app.checks import (
     apply_block_eligibility,
@@ -200,8 +200,13 @@ async def _run_pr_analysis(
     for file_path, _line, _content in added:
         files[file_path] = files.get(file_path, 0) + 1
 
-    # check_exists injected so SQG001 uses the Redis-cached registry lookup.
-    repo_context = {"repo": repo, "head_sha": head_sha, "token": token, "check_exists": cached_existence}
+    # check_exists injected so SQG001 uses the Redis-cached registry lookup;
+    # created_fn likewise for SQG007's established-package gate (ADR-025).
+    repo_context = {
+        "repo": repo, "head_sha": head_sha, "token": token,
+        "check_exists": cached_existence,
+        "created_fn": cached_registry_created,
+    }
     disabled = settings.disabled_analyzer_ids
     # (rule id, thunk) — the kill-switch drops any disabled analyzer.
     runners = [
