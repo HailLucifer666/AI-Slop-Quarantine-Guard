@@ -34,6 +34,7 @@ import httpx
 
 from app.diff import parse_diff
 from app.manifests import (
+    _yarn_name,
     extract_pinned_lockfile,
     lockfile_ecosystem,
     manifest_ecosystem,
@@ -192,20 +193,101 @@ def _find_line(name: str, version: str, added: List[Tuple[int, str]]) -> Optiona
     return None
 
 
-def _find_lock_line(name: str, version: str, added: List[Tuple[int, str]]) -> Optional[int]:
-    """Locate a lockfile pin in the added lines.
+def _find_lock_line(name: str, version: str, added: List[Tuple[int, str]], path: str = "") -> Optional[int]:
+    """Locate a lockfile pin's line inside the entry that declares it.
 
     Unlike a manifest, a lockfile puts the name and the resolved version on
-    *separate* lines (e.g. poetry.lock / package-lock.json), so we require the
-    name to appear somewhere in the added block and report the version's line.
+    *separate* lines, and the same version string repeats across entries — so the
+    first ``"version"`` line in the block can belong to a DIFFERENT package (scan
+    #18 cited another entry's version line). The locator therefore:
+
+    1. walks the added lines tracking which lockfile entry each belongs to
+       (npm v2/v3 ``node_modules/<pkg>`` keys, yarn ``name@range:`` headers,
+       poetry/Cargo ``[[package]]`` + ``name =`` blocks) and returns the version
+       line inside the matching entry;
+    2. falls back to the version string when it appears exactly once in the block
+       (that line is factually the pin's line regardless of format);
+    3. falls back to the package's own entry/name line — still a true statement
+       about the package — when the version line is ambiguous;
+    4. returns None only when the name never appears, meaning the pin was not
+       introduced by this change (the caller then skips it, as before).
+
     The (name, version) pair itself comes from an authoritative parse, so the
-    finding is real even though the reported line is approximate.
+    finding is real at every rung; what this guarantees is that the anchor never
+    cites a foreign package's version line.
     """
     if not any(name in text for _, text in added):
         return None
-    for line_no, text in added:
-        if version in text:
-            return line_no
+
+    filename = path.replace("\\", "/").rsplit("/", 1)[-1]
+    anchored = _anchored_lock_line(name, version, added, filename)
+    if anchored is not None:
+        return anchored
+
+    # Prefer a line that names the package AND the version — under any format the
+    # structural walker doesn't cover, that line is still a true statement about
+    # this pin (review finding, 2026-11-13: a bare-version rung could cite another
+    # package's resolved-URL that merely embeds the version string).
+    both = [line_no for line_no, text in added if name in text and version in text]
+    if len(both) == 1:
+        return both[0]
+
+    version_matches = [line_no for line_no, text in added if version in text]
+    if len(version_matches) == 1:
+        return version_matches[0]
+
+    # Ambiguous version, no structural match: anchor the package's own name line —
+    # matched as a whole token, so "foo" never lands inside "foobar"'s entry —
+    # rather than a foreign version line.
+    token = re.compile(rf"(?<![\w@/.-]){re.escape(name)}(?![\w.-])")
+    return next((line_no for line_no, text in added if token.search(text)), None)
+
+
+_NPM_ENTRY_KEY = re.compile(r'"(?:node_modules/)?([^"]+)":\s*\{')
+
+
+def _anchored_lock_line(
+    name: str, version: str, added: List[Tuple[int, str]], filename: str
+) -> Optional[int]:
+    """The version line inside the entry that declares ``name``, per lockfile
+    format — or None when this format's structure is not visible in the block."""
+    if filename == "package-lock.json":
+        current: Optional[str] = None
+        for line_no, text in added:
+            stripped = text.strip()
+            # A nested key ("node_modules/a/node_modules/b") describes the last
+            # segment; the root "" key and non-entry keys never match.
+            entry = _NPM_ENTRY_KEY.match(stripped)
+            if entry:
+                current = entry.group(1).rsplit("node_modules/", 1)[-1]
+            elif current == name and stripped.startswith('"version"') and version in stripped:
+                return line_no
+        return None
+    if filename == "yarn.lock":
+        current = None
+        for line_no, text in added:
+            stripped = text.strip()
+            if stripped.endswith(":") and "@" in stripped:
+                # Scoped names begin with '@' (@babel/core@^7.0.0) — derive the name
+                # with the parser's own rule instead of a second regex that disagrees
+                # with it (review finding, 2026-11-13). Multi-spec headers
+                # ("a@^1, a@^2":) resolve on their first descriptor.
+                first_spec = stripped.rstrip(":").strip('"').split(",")[0].strip()
+                current = _yarn_name(first_spec)
+            elif current == name and stripped.startswith("version") and version in stripped:
+                return line_no
+        return None
+    if filename in ("poetry.lock", "Cargo.lock"):
+        current = None
+        for line_no, text in added:
+            stripped = text.strip()
+            if stripped.startswith("[["):
+                current = None  # a new package block begins; its name comes next
+            elif stripped.startswith("name"):
+                current = stripped.split("=", 1)[-1].strip().strip('"').strip("'")
+            elif current == name and stripped.startswith("version") and version in stripped:
+                return line_no
+        return None
     return None
 
 
@@ -454,7 +536,7 @@ async def check_vulnerabilities(
                 # Lockfile: the fully resolved tree, all pinned exactly.
                 assert lock_eco is not None
                 pins = [(lock_eco, n, v) for n, v in extract_pinned_lockfile(path, content)]
-                locate = _find_lock_line
+                locate = lambda n, v, a: _find_lock_line(n, v, a, path)  # noqa: E731 — format needs the filename
             elif is_versioned:
                 # go.mod / pom.xml / build.gradle / *.csproj — literal versions only;
                 # whatever the parser could not resolve is simply absent here.

@@ -26,6 +26,7 @@ from typing import List
 from app.diff import parse_diff
 
 from .base import Confidence, Evidence, Finding
+from .paths import in_test_path
 
 RULE_ID = "SQG002"
 
@@ -67,14 +68,12 @@ _CERTAIN_PATTERNS: list[tuple[str, re.Pattern]] = [
 _PEM_BODY = re.compile(r"^[A-Za-z0-9+/]{32,}={0,2}$")
 
 # Paths where a distinctive token is almost always intentional test/sample material
-# (a committed test TLS key, an example token in a spec). We still SURFACE it, but
-# downgrade it from CERTAIN/block-eligible to HIGH/advisory — blocking a PR on a known
-# test fixture would violate the "never falsely block" promise.
-_TEST_PATH = re.compile(
-    r"(?:^|/)(?:tests?|__tests__|testdata|test[-_]data|fixtures?|mocks?|"
-    r"examples?|samples?|e2e|specs?|__mocks__)(?:/|$)|\.(?:test|spec)\.",
-    re.IGNORECASE,
-)
+# are classified by the SHARED classifier (analyzers/paths.py) — SQG001 uses the same
+# vocabulary, and scan #20 (openai/codex-security) proved a private copy drifts: the
+# old local regex missed `tests-ts/`, `cli-fixtures.ts` and `evals/` and two fixture
+# tokens came out CERTAIN. We still SURFACE test-path tokens, but downgrade them from
+# CERTAIN/block-eligible to HIGH/advisory — blocking a PR on a known test fixture
+# would violate the "never falsely block" promise.
 
 # Files that are illustrative by nature — examples, templates, docs. A "secret" here
 # is almost always a placeholder showing the expected shape (e.g. .env.example,
@@ -117,7 +116,7 @@ _ASSIGNMENT_UNQUOTED = re.compile(
 _NONSECRET_WORDS = (
     "stub", "fake", "sample", "example", "dummy", "placeholder", "changeme",
     "redacted", "managed-by", "managed_by", "original_value", "not-a", "not_a",
-    "localhost", "your_", "your-", "todo", "dev-",
+    "localhost", "your_", "your-", "todo", "dev-", "synthetic",
 )
 # A value that is a URI/URN/scheme reference is an endpoint, audience, or constant
 # (e.g. an OAuth grant-type URN `urn:ietf:params:oauth:grant-type:token-exchange`),
@@ -187,6 +186,20 @@ def _is_label_echo(name: str, value: str) -> bool:
 def _is_allowlisted(line: str) -> bool:
     low = line.lower()
     return any(token in low for token in _ALLOWLIST)
+
+
+# Marker words that make a DISTINCTIVE token self-identifying as fake. Checked
+# INSIDE the matched token only — never the surrounding window. A marker word
+# next to a real token is attacker-controlled (a comment is free), so the
+# ±20-char window allowlist above deliberately gains no new vocabulary; this
+# check reads the token the pattern itself matched. Scan #20 (openai/codex-security)
+# fired CERTAIN / block-eligible on the literal "github_pat_SYNTHETIC_GITHUB_PAT_123".
+_TOKEN_MARKERS = ("synthetic", "not-a-real", "not_real")
+
+
+def _token_carries_marker(token: str) -> bool:
+    low = token.lower()
+    return any(marker in low for marker in _TOKEN_MARKERS)
 
 
 # How far either side of a match the allowlist/placeholder checks look. Scoped to
@@ -339,7 +352,7 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
         by_file.setdefault(path, []).append((line, content))
 
     for path, added in by_file.items():
-        in_test = bool(_TEST_PATH.search(path))
+        in_test = in_test_path(path)
         in_example = bool(_EXAMPLE_PATH.search(path))
         for idx, (line, content) in enumerate(added):
             matched = False
@@ -349,6 +362,15 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                     continue
                 if _is_allowlisted(_window(content, m.start(), m.end())):
                     matched = True  # a real match existed here; don't also fall through to the generic tier
+                    break
+                # A token whose own value carries a fake-marker word is self-identifying
+                # fixture material — downgraded on every path (the value, not the
+                # surroundings, is what speaks here).
+                if _token_carries_marker(m.group(0)):
+                    findings.append(
+                        _advisory(label, m.group(0), path, line, "(marker word inside the token value)")
+                    )
+                    matched = True
                     break
                 # A private-key header with no key material anywhere near it — a bare
                 # header quoted in a doc or this detector's own docstring, or a

@@ -216,3 +216,61 @@ async def test_unterminated_block_comment_opening_line_not_flagged():
         "/* eval(userInput) is dangerous, this whole block is disabled:"
     ]), {})
     assert findings == []
+
+
+# --- usedforsecurity=False (scan #20 finding 9: git empty-blob hashing) -------
+# Probe (2026-11-13, run and restored): disabling the flag guard reded exactly the
+# suppress test while both negative controls stayed green.
+
+@pytest.mark.asyncio
+async def test_weak_hash_with_usedforsecurity_false_not_flagged():
+    # hashlib's own flag says this hash protects nothing (git blob hashing, cache
+    # keys). The flag must be on the SAME line as the call to count.
+    diff = _diff("scripts/hash.py", ['digest = hashlib.sha1(b"blob 0", usedforsecurity=False).hexdigest()'])
+    assert await check_sast(diff, {}) == []
+
+
+@pytest.mark.asyncio
+async def test_weak_hash_without_flag_still_flagged():
+    # Negative control: the guard must not switch the weak-hash rule off.
+    diff = _diff("scripts/hash.py", ["digest = hashlib.md5(data).hexdigest()"])
+    findings = await check_sast(diff, {})
+    assert len(findings) == 1
+    assert findings[0].rule_id == "SQG006"
+
+
+@pytest.mark.asyncio
+async def test_usedforsecurity_false_on_another_line_still_flagged():
+    # A multi-line call with the flag out of sight still surfaces — the same-line
+    # rule fails safe toward keep-the-finding.
+    diff = _diff("scripts/hash.py", ["digest = hashlib.sha1(", "    data, usedforsecurity=False,"])
+    findings = await check_sast(diff, {})
+    assert len(findings) == 1
+
+
+# --- review hardening (2026-11-13): the flag must belong to the matched call --
+
+@pytest.mark.asyncio
+async def test_flag_mention_in_trailing_comment_does_not_suppress():
+    # A comment explaining the flag is NOT yet passed is the natural way to write
+    # about this code — it must not silence a real unflagged call.
+    diff = _diff("scripts/hash.py", ["h = hashlib.sha1(secret).hexdigest()  # TODO: pass usedforsecurity=False here"])
+    findings = await check_sast(diff, {})
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_flag_inside_a_string_literal_does_not_suppress():
+    diff = _diff("scripts/hash.py", ['cfg = {"flag": "usedforsecurity=False"}; h = hashlib.sha1(secret).hexdigest()'])
+    findings = await check_sast(diff, {})
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_flagged_sibling_call_does_not_suppress_an_unflagged_one():
+    # Compound line: the md5 call carries its own flag; the sha1 call does not.
+    # Suppressing per-call must still surface the sha1 (one finding per line holds).
+    diff = _diff("scripts/hash.py", ["a = hashlib.md5(k, usedforsecurity=False).digest(); b = hashlib.sha1(secret).hexdigest()"])
+    findings = await check_sast(diff, {})
+    assert len(findings) == 1
+    assert "sha1" in findings[0].message

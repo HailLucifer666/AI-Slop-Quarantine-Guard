@@ -36,7 +36,20 @@ _EXISTENCE: Dict[tuple, Existence] = {
     ("pypi", "chardet"): Existence.EXISTS,
     ("pypi", "pyqt5"): Existence.EXISTS,
     ("pypi", "sqg-hallucinated-package-xyz789"): Existence.MISSING,
+    # Verified 2026-11-13 (live HTTP status): bleak 200, reqests 404.
+    ("pypi", "bleak"): Existence.EXISTS,
+    ("pypi", "reqests"): Existence.MISSING,
 }
+
+# (ecosystem, normalized name) -> first-release timestamp as observed on
+# VERIFIED_ON_DATE (ISO, parsed with fromisoformat). An absent key returns None:
+# "age unknown" — which keeps every SQG007 finding (fail-safe, ADR-025).
+_CREATED: Dict[tuple, str] = {
+    # bleak first upload, from the PyPI JSON `releases` timestamps (verified live).
+    ("pypi", "bleak"): "2018-04-27T09:43:02",
+}
+
+VERIFIED_ON_DATE = "2026-11-13"
 
 # (ecosystem, name) -> license label, verbatim from the registry JSON.
 _LICENSES: Dict[tuple, str] = {
@@ -93,10 +106,25 @@ async def replay_license(ecosystem: str, name: str, _client=None) -> Optional[st
     return _LICENSES.get((ecosystem, _normalize(name)))
 
 
+async def replay_created(ecosystem: str, name: str, _client=None):
+    """Registry first-release date as observed on VERIFIED_ON_DATE; None when unrecorded.
+
+    None means "age unknown", and the SQG007 gate treats unknown as keep-the-finding —
+    the same honesty rule replay_existence applies to UNKNOWN existence.
+    """
+    from datetime import datetime
+
+    raw = _CREATED.get((ecosystem, _normalize(name)))
+    if raw is None:
+        return None
+    return datetime.fromisoformat(raw)
+
+
 REPLAY_OVERRIDES = {
     "check_exists": replay_existence,
     "query_batch": replay_osv_batch,
     "fetch_license": replay_license,
+    "created_fn": replay_created,
 }
 
 
@@ -185,6 +213,33 @@ EXPECTATIONS: List[Expectation] = [
         why="Ordinary TypeScript using textContent rather than innerHTML, with 'eval' "
             "appearing only inside an identifier.",
         must_not_find=ALL_RULES,
+    ),
+    Expectation(
+        fixture="established-lookalike",
+        why="bleak is the standard cross-platform BLE library (first PyPI release "
+            "2018-04-27, verified live 2026-11-13), two edits from popular 'black' - "
+            "the distance heuristic alone flagged it in scan #18. With registry age "
+            "available the established-package gate must suppress the SQG007 finding.",
+        must_not_find=ALL_RULES,
+    ),
+    Expectation(
+        fixture="fresh-lookalike",
+        why="'reqests' is a clean 404 (verified live 2026-11-13) with NO recorded "
+            "first-release date - age unknown keeps the typosquat finding (fail-safe), "
+            "and SQG001 independently blocks the hallucinated name. This is the "
+            "positive control proving the age gate never switches the detector off.",
+        must_find={"SQG001": 1, "SQG007": 1},
+        min_confidence={"SQG001": "CERTAIN", "SQG007": "HIGH"},
+        must_not_find=frozenset({"SQG003", "SQG004", "SQG005", "SQG006"}),
+    ),
+    Expectation(
+        fixture="synthetic-token",
+        why="A distinctive token whose own value carries a fake-marker word is fixture "
+            "material — surfaced as an advisory, never CERTAIN/block-eligible (scan #20 "
+            "blocked on a literal github_pat_SYNTHETIC_... token).",
+        must_find={"SQG002": 1},
+        min_confidence={"SQG002": "HIGH"},
+        must_not_find=frozenset({"SQG001", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007"}),
     ),
     Expectation(
         fixture="clean-dependencies",

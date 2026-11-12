@@ -516,3 +516,44 @@ Every major choice is tracked here with context + rationale. Future decisions bu
 **Why.** A scanner that requires users to sprinkle ignore-comments offloads the detector's job onto its users. Annotations inside the Guard's own source would also be the harness grading itself leniently.
 
 **Consequence for Phase 4 (suppression feature).** Inline suppression exists as an opt-in ADOPTION feature for users' *accepted* findings only — grammar frozen 2026-11-12 in `docs/PLAN.md` (Phase 4, Step 4.5): `slopguard: ignore SQGnnn -- reason`, rule ids explicit, no wildcard, reasons required, receipts always printed, never able to hide block-eligible findings (those require a base-branch baseline). False alarms never route through it.
+
+---
+
+## ADR-024: Fixture and Workspace-Internal Findings Downgrade, Never Silence
+
+**Date:** 2026-11-12  
+**Status:** ACCEPTED
+
+**Context:**  
+Scan #20 (openai/codex-security) produced two CERTAIN / block-eligible findings on the repo's own test fixtures: a leaked-token alarm on the literal string `github_pat_SYNTHETIC_GITHUB_PAT_123`, and a hallucinated-package alarm on `evals/triage-finding/fixtures/repo/package.json` — a fixture built to contain a fake package. Blocking on either would have broken the never-false-block promise (ADR-023's principle applied across detectors).
+
+**Decision:**  
+Downgrades are detector-side, derived, and layered — most-specific intent signal first, every rung surfaced as advisory, never silently dropped:
+1. **Value-internal markers** (SQG002): a distinctive token whose own value carries a fake-marker word (`synthetic`, `not-a-real`, `not_real`) downgrades on every path. The ±20-char window allowlist deliberately gains no vocabulary — a marker word *next to* a real token is attacker-controlled and must not suppress it.
+2. **Shared test-path classifier** (`analyzers/paths.py`, one constant for SQG001 + SQG002): segment-delimited test tokens (`tests-ts/`, `cli-fixtures.ts`, `evals/`, `__snapshots__/`, `cypress/` included); boundary rules pin that `contest.py`, `latest.md`, `testutils/`, `prospects/` never match.
+3. **Workspace-internal names** (SQG001): a public-registry 404 for a name the repo itself declares (manifest `name` fields, **per ecosystem** — an npm declaration answers npm questions only; **PEP 503-normalized** for PyPI so `my_lib` and `my-lib` match) is a workspace-internal package, advisory only. Whole-tree collection in scan mode, diff-touched manifests in PR mode. `private: true` is deliberately NOT a signal — nearly every application manifest sets it, and their dependencies still come from the registry; the derived signal is "declared by this repo". **Fixture manifests are excluded from collection** — a fixture-declared name must not legitimize a production-path 404 (the fixture rung carries that case alone).
+
+**Accepted tradeoff (steering).** An author chooses file paths, so naming a folder `evals/` or `fixtures/` can steer SQG001's fixture-path downgrade and hide a would-be blocker. Accepted for the dependency case because the alternative is blocking on fixtures, and because the workspace-name and private-index rungs still require repo-declared evidence. For secrets the tradeoff is narrower: test paths only downgrade to advisory (still surfaced), and value-internal markers cannot be added by path naming.
+
+**Known limit (recorded, not fixed):** the detector validates no token checksums (prefix+length regexes only; AWS AKIA is the only pattern with a public checksum algorithm), so a real leak in a test folder surfaces as HIGH advisory rather than CERTAIN. Real leaks do land in test folders — they are surfaced, never silenced.
+
+**Residual classes of the path classifier (probed 2026-11-12, accepted, not fixed):** ordinary production directories whose names contain delimited test tokens are downgraded too — `src/ab-test/`, `src/ab_tests/` (A/B-testing features), `migrations/002_add_tests_table.py`, `api/e2e-monitor/` (production monitoring), `src/patent-samples/`. Same tradeoff as path steering, but these are names nobody chose in order to steer — the cost is advisory-only downgrades, never silencing. Still-unmatched fixture carriers: digit-suffixed segments (`tests2/`) and CamelCase fixture holders (`TestConstants.kt`, `MockResponses.java`) where no delimiter precedes the token — Java/Kotlin repos are the most exposed; widening the vocabulary to those shapes is deferred until a real scan shows the miss.
+
+---
+
+## ADR-025: SQG007 Established-Package Gate (Registry Age)
+
+**Date:** 2026-11-13  
+**Status:** ACCEPTED
+
+**Context:**  
+Scan #18 (Aether BLE) produced the scan's only false positive: SQG007 flagged `bleak` as a typosquat of `black` — two Levenshtein edits apart. bleak is the standard cross-platform BLE library (hbldh/bleak, MIT, first PyPI release **2018-04-27**, verified live 2026-11-13; 61 releases, still actively maintained). A near-look-alike heuristic with no legitimacy signal cannot tell an established package from a fresh squat. A hand-allowlist of bleak was rejected: it is the Gate-D failure shape — the next legitimate look-alike name needs another hand-edit.
+
+**Decision:**  
+A derived legitimacy signal: the package's **first-release date from its own registry**, parsed from the same response bodies the existence check already downloads (PyPI JSON `releases` upload times, npm packument `time.created`, crates `crate.created_at`) — no new endpoint, cached like existence (`cached_registry_created`, None never cached). When the age is known and ≥ **730 days** (ADR'd value: historical typosquat campaigns publish and strike within days-to-weeks; an 8.5-year-old package is categorically not one; anything younger or undated keeps the finding), SQG007 does not flag.
+
+**Fail-safe direction (both ways the gate can fail):** no `created_fn` wired → pre-gate behaviour (finding stays); registry outage, unknown name, or the field missing → None → **finding stays**. Age data going quietly missing must never turn suppression on. PyPI's project-level `releases` key is deprecated by announcement — its disappearance degrades to "age unknown", which is recorded in CHECKS_CATALOG.
+
+**Known limit (recorded):** an attacker can publish a look-alike and wait out the threshold. Acceptable because SQG007 is advisory-only and never blocks; the age signal is a precision tool against the dominant fresh-squat shape, not a security guarantee.
+
+**Wiring:** `scan.py` and `worker.py` inject `created_fn` (cached) into `repo_context`; direct callers without the key keep pre-gate behaviour. The corpus is the loud guard against wiring drift: `established-lookalike` (bleak must stay silent) and `fresh-lookalike` (`reqests` must stay flagged) run through the real `run_scan` with replayed registry facts verified live 2026-11-13 (bleak HTTP 200, reqests HTTP 404).

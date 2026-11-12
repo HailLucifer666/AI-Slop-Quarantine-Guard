@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useRef, useState } from "react"
-import { FileArchive, FolderOpen, Github, Loader2, ScanLine } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { ArrowUpRight, FileArchive, FolderOpen, Github, Loader2, ScanLine } from "lucide-react"
 
 import { getScan, startLocalScan, startUrlScan, startZipScan } from "@/lib/api"
 import { isTerminal, type ScanDetail } from "@/lib/types"
@@ -12,7 +12,11 @@ import { ScanResults } from "./ScanResults"
 
 type Mode = "url" | "zip" | "local"
 const POLL_MS = 1500
-const TIMEOUT_MS = 120000
+// No 2-minute give-up: scans 21/22 (qwen-code, free-claude-code) legitimately ran
+// past 120s and this deadline threw "Still running in the background" while the
+// database showed the scan completing fine — the single biggest "hang" report.
+// Poll to a terminal status with a generous cap, and say so honestly past it.
+const MAX_POLL_MS = 30 * 60 * 1000
 const TABS: { id: Mode; label: string; icon: typeof Github }[] = [
   { id: "url", label: "Public URL", icon: Github },
   { id: "zip", label: "Upload .zip", icon: FileArchive },
@@ -46,17 +50,38 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
   const [phase, setPhase] = useState("")
   const [error, setError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  // Set on unmount so a poll loop outliving the component stops quietly instead of
+  // hammering the API for its full window (review finding, 2026-11-13).
+  const pollAborted = useRef(false)
+  useEffect(() => () => { pollAborted.current = true }, [])
 
   const poll = useCallback(async (id: number) => {
-    const deadline = Date.now() + TIMEOUT_MS
+    const deadline = Date.now() + MAX_POLL_MS
+    // One failed poll (laptop sleep, API redeploy, a transient 500) must not end a
+    // 30-minute wait — the whole point of this loop. Tolerate a streak of failures
+    // and only surface them when contact is genuinely lost.
+    let failures = 0
     while (Date.now() < deadline) {
-      const s = await getScan(id)
+      let s: ScanDetail
+      try {
+        s = await getScan(id)
+        failures = 0
+      } catch {
+        failures += 1
+        if (failures >= 3)
+          throw new Error("Lost contact with the scanner API — check that it is running, then try again.")
+        await new Promise((r) => setTimeout(r, POLL_MS))
+        continue
+      }
       setScan(s)
       setPhase(s.status === "running" ? "Analyzing codebase…" : s.status === "queued" ? "Queued…" : "")
       if (isTerminal(s.status)) return s
+      if (pollAborted.current) return s // component unmounted; stop quietly
       await new Promise((r) => setTimeout(r, POLL_MS))
     }
-    throw new Error("Still running in the background — check Analyses for the result.")
+    throw new Error(
+      "Still running after 30 minutes — it may be queued behind other scans. Check Analyses for the result; this window stopped waiting."
+    )
   }, [])
 
   async function run() {
@@ -64,6 +89,7 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
     setBusy(true)
     setScan(null)
     setPhase("Starting…")
+    pollAborted.current = false
     try {
       let id: number
       if (mode === "url") {
@@ -104,7 +130,7 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
       {mode === "local" && (
         <div className="flex flex-col gap-1.5">
           <input className="wall-input" placeholder="C:\path\to\project  ·  /home/you/project" value={path} onChange={(e) => setPath(e.target.value)} disabled={busy} />
-          <p className="text-xs" style={{ color: "var(--wall-faint)" }}>Full path to a folder on the machine running the scanner (Windows or Unix style).</p>
+          <p className="text-xs" style={{ color: "var(--text-faint)" }}>Full path to a folder on the machine running the scanner (Windows or Unix style).</p>
         </div>
       )}
       {mode === "zip" && (
@@ -113,7 +139,7 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
             <FileArchive className="h-4 w-4" aria-hidden /> {file ? file.name : "Choose .zip"}
           </button>
           {file && !busy && (
-            <button onClick={() => { setFile(null); if (fileInput.current) fileInput.current.value = "" }} className="wall-click wall-focus text-xs" style={{ color: "var(--wall-muted)" }}>
+            <button onClick={() => { setFile(null); if (fileInput.current) fileInput.current.value = "" }} className="wall-click wall-focus inline-flex min-h-[44px] items-center text-sm" style={{ color: "var(--text-muted)" }}>
               Clear
             </button>
           )}
@@ -121,19 +147,21 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
         </div>
       )}
 
-      {error && <p className="text-sm" style={{ color: "var(--wall-act-failed)" }}>{error}</p>}
+      {error && <p role="alert" className="text-sm" style={{ color: "var(--sev-certain)" }}>{error}</p>}
 
       <button onClick={run} disabled={busy} className="wall-cta">
         {busy ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> {phase || "Working…"}</> : <><ScanLine className="h-4 w-4" aria-hidden /> Run scan</>}
       </button>
 
-      <div className="flex flex-col gap-3 rounded-xl p-4" style={{ border: "1px solid var(--wall-line)" }}>
+      <div className="flex flex-col gap-3 rounded-xl p-4" style={{ border: "1px solid var(--line)" }}>
         <div className="wall-label">Activity</div>
         <AnimatedScan
           status={scan?.status ?? (busy ? "queued" : "idle")}
           progress={scan?.progress}
           startedAt={scan?.created_at}
           filesScanned={scan?.analytics?.files_scanned ?? null}
+          queuePosition={scan?.queue_position ?? null}
+          heartbeatAt={scan?.heartbeat_at}
           active={active}
         />
         <div className="h-[360px] overflow-hidden">
@@ -144,15 +172,15 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
       {scan?.status === "completed" && (
         <div className="space-y-4">
           <ScanResults scan={scan} />
-          <button onClick={() => onOpenFindings(scan.id)} className="wall-click wall-focus text-xs" style={{ color: "var(--wall-muted)" }}>
-            Open full report ↗
+          <button onClick={() => onOpenFindings(scan.id)} className="wall-click wall-focus inline-flex min-h-[44px] items-center text-sm" style={{ color: "var(--text-muted)" }}>
+            Open full report <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
           </button>
         </div>
       )}
       {scan?.status === "failed" && (
-        <div className="rounded-md p-3 text-sm" style={{ color: "var(--wall-act-failed)", background: "rgba(255,59,92,0.07)", border: "1px solid rgba(255,59,92,0.22)" }}>
+        <div role="alert" className="rounded-md p-3 text-sm" style={{ color: "var(--sev-certain)", background: "rgba(255,59,92,0.07)", border: "1px solid rgba(255,59,92,0.22)" }}>
           <p>{friendlyError(scan.error ?? "unknown error")}</p>
-          {scan.error && <p className="mt-1.5 font-mono text-xs" style={{ color: "var(--wall-faint)" }}>Details: {scan.error}</p>}
+          {scan.error && <p className="mt-1.5 font-mono text-xs" style={{ color: "var(--text-faint)" }}>Details: {scan.error}</p>}
         </div>
       )}
     </div>

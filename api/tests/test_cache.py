@@ -125,3 +125,47 @@ async def test_osv_batch_none_is_never_cached(fake_redis, monkeypatch):
     await cache.cached_osv_batch(pins, None)
     await cache.cached_osv_batch(pins, None)
     assert len(calls) == 2  # outage re-queried every time, never persisted
+
+
+@pytest.mark.asyncio
+async def test_created_cache_roundtrip_and_never_cache_none(fake_redis, monkeypatch):
+    from datetime import datetime, timezone
+
+    calls = []
+
+    async def fake_created(ecosystem, name, client):
+        calls.append(name)
+        if name == "bleak":
+            return datetime(2018, 4, 27, 9, 43, 2, tzinfo=timezone.utc)
+        return None  # outage shape
+
+    monkeypatch.setattr(cache, "_registry_created_at", fake_created)
+    first = await cache.cached_registry_created("pypi", "bleak", None)
+    assert first is not None and first.year == 2018
+    # second identical lookup is served from the cache without hitting the producer
+    second = await cache.cached_registry_created("pypi", "bleak", None)
+    assert second == first and calls.count("bleak") == 1
+    # None is never cached: an outage re-fetches on every call
+    await cache.cached_registry_created("pypi", "downpkg", None)
+    await cache.cached_registry_created("pypi", "downpkg", None)
+    assert calls.count("downpkg") == 2
+
+
+@pytest.mark.asyncio
+async def test_created_cache_key_normalizes_pypi_names(fake_redis, monkeypatch):
+    # 'Bleak' and 'bleak' alias one registry body; they must alias one cache entry
+    # (review NIT, 2026-11-13) — the producer must fire exactly once.
+    calls = []
+
+    async def fake_created(ecosystem, name, client):
+        calls.append(name)
+        from datetime import datetime, timezone
+        return datetime(2018, 4, 27, 9, 43, 2, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(cache, "_registry_created_at", fake_created)
+    await cache.cached_registry_created("pypi", "Bleak", None)
+    await cache.cached_registry_created("pypi", "bleak", None)
+    # One producer call total: the first lookup's key is the NORMALIZED name, so the
+    # second spelling hits the same entry (the producer seeing 'bleak' rather than
+    # 'Bleak' is the normalization itself doing its job).
+    assert calls == ["bleak"]

@@ -15,6 +15,8 @@ import type {
 } from "./types"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+/** Reachable base URL for callers outside this module (e.g. the shell health poll). */
+export const API_BASE = BASE
 
 async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {

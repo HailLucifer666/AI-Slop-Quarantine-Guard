@@ -12,21 +12,23 @@ on an added diff line.
 """
 
 import re
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 
 import httpx
 
 from app import github_client
 from app.diff import parse_diff
 from app.manifests import (
+    collect_workspace_names,
     extract_dependency_names,
     has_pip_extra_index,
     manifest_ecosystem,
     npmrc_private_scopes,
 )
-from app.registries import Existence, check_exists
+from app.registries import Existence, check_exists, normalize_pypi
 
 from .base import Confidence, Evidence, Finding
+from .paths import in_test_path
 
 RULE_ID = "SQG001"
 
@@ -101,6 +103,50 @@ def _private_index_finding(name: str, ecosystem: str, path: str, line: int, snip
     )
 
 
+def _workspace_finding(name: str, ecosystem: str, path: str, line: int, snippet: str) -> Finding:
+    """A public-registry 404 for a name THIS repo declares — a workspace-internal
+    package the public registry has never heard of by design. Derived from the
+    manifests' own ``name`` fields (scan mode: whole tree; PR mode: manifests the
+    diff touches — an un-touched workspace package keeps its CERTAIN finding)."""
+    return Finding(
+        category="dependency",
+        confidence=Confidence.HIGH,
+        block_eligible=False,
+        file_path=path,
+        line_start=line,
+        line_end=line,
+        message=(
+            f"'{name}' was not found on the public {ecosystem} registry, but a manifest "
+            f"in this repo declares that name — likely a workspace-internal package. Advisory only."
+        ),
+        evidence=Evidence(snippet=snippet.strip()),
+        tool=f"registry:{ecosystem}",
+        rule_id=RULE_ID,
+    )
+
+
+def _fixture_path_finding(name: str, ecosystem: str, path: str, line: int, snippet: str) -> Finding:
+    """A public-registry 404 inside a test/fixture path — intentional fixture
+    material (scan #20: evals/triage-finding/fixtures carried a fake package on
+    purpose). Surfaced as advisory, never blocked; a fake package in a fixture
+    is exactly what the fixture exists to contain."""
+    return Finding(
+        category="dependency",
+        confidence=Confidence.HIGH,
+        block_eligible=False,
+        file_path=path,
+        line_start=line,
+        line_end=line,
+        message=(
+            f"'{name}' was not found on the public {ecosystem} registry, but the "
+            f"manifest lives in a test/fixture path — intentional test material. Advisory only."
+        ),
+        evidence=Evidence(snippet=snippet.strip()),
+        tool=f"registry:{ecosystem}",
+        rule_id=RULE_ID,
+    )
+
+
 async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
     """Flag hallucinated dependencies added in this PR.
 
@@ -124,12 +170,34 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
     findings: List[Finding] = []
     npmrc_scopes: Optional[set[str]] = None  # lazy, fetched at most once per scan
     async with httpx.AsyncClient(timeout=10) as client:
+        # Pass 1: fetch every manifest once and collect the names this repo itself
+        # declares — a public-registry 404 for one of them is a workspace-internal
+        # package, not a hallucination. PR mode has no repo tree, so the set comes
+        # from the manifests this diff touches; anything else stays CERTAIN.
+        manifest_contents: Dict[str, str] = {}
+        for path in added_by_file:
+            if manifest_ecosystem(path) is None:
+                continue
+            content = await fetch_file(path)
+            if content:
+                manifest_contents[path] = content
+        declared_all: Dict[str, set[str]] = dict(repo_context.get("workspace_names") or {})
+        for eco, names in collect_workspace_names(manifest_contents).items():
+            declared_all.setdefault(eco, set()).update(names)
+        # PyPI normalizes names (PEP 503: case, [-_.] runs) on the registry side, so
+        # the membership test must too: a repo declaring `my_lib` while depending on
+        # `my-lib` is the repo's own package either way (review finding, 2026-11-12).
+        declared_needles = {
+            eco: {normalize_pypi(n) for n in names} if eco == "pypi" else names
+            for eco, names in declared_all.items()
+        }
+
         for path, added in added_by_file.items():
             ecosystem = manifest_ecosystem(path)
             if ecosystem is None:
                 continue
 
-            content = await fetch_file(path)
+            content = manifest_contents.get(path)
             if not content:
                 continue  # can't parse → stay silent (protects zero-FP bar)
 
@@ -153,15 +221,26 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
                 snippet = next(c for ln, c in added if ln == line)
                 result = await exists_fn(ecosystem, name, client)
                 if result is Existence.MISSING:
-                    is_private = pip_private or (
-                        ecosystem == "npm"
-                        and npmrc_scopes
-                        and any(name.startswith(f"{scope}/") for scope in npmrc_scopes)
-                    )
-                    if is_private:
-                        findings.append(_private_index_finding(name, ecosystem, path, line, snippet))
+                    # Downgrade ladder, most-specific intent signal first — every rung
+                    # is derived (shared path classifier / manifest name fields /
+                    # declared private index), never a hand-kept list (gate D). A
+                    # clean 404 on a public path with none of these stays CERTAIN.
+                    if in_test_path(path):
+                        findings.append(_fixture_path_finding(name, ecosystem, path, line, snippet))
                     else:
-                        findings.append(_missing_finding(name, ecosystem, path, line, snippet))
+                        needle = normalize_pypi(name) if ecosystem == "pypi" else name
+                        if needle in declared_needles.get(ecosystem, set()):
+                            findings.append(_workspace_finding(name, ecosystem, path, line, snippet))
+                        else:
+                            is_private = pip_private or (
+                                ecosystem == "npm"
+                                and npmrc_scopes
+                                and any(name.startswith(f"{scope}/") for scope in npmrc_scopes)
+                            )
+                            if is_private:
+                                findings.append(_private_index_finding(name, ecosystem, path, line, snippet))
+                            else:
+                                findings.append(_missing_finding(name, ecosystem, path, line, snippet))
                 elif result is Existence.UNKNOWN:
                     findings.append(_unknown_finding(name, ecosystem, path, line, snippet))
 

@@ -63,18 +63,18 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
   const ruleSegments: Segment[] = RULE_ORDER
     .map((id) => ({ label: CHECKS[id]?.name ?? id, value: a?.by_rule?.[id] ?? 0, color: RULE_COLOR[id] }))
   const sevSegments: Segment[] = [
-    { label: "Certain", value: a?.by_confidence?.CERTAIN ?? 0, color: "var(--wall-sev-certain)" },
-    { label: "High", value: a?.by_confidence?.HIGH ?? 0, color: "var(--wall-sev-high)" },
-    { label: "Medium", value: a?.by_confidence?.MEDIUM ?? 0, color: "var(--wall-sev-medium)" },
+    { label: "Certain", value: a?.by_confidence?.CERTAIN ?? 0, color: "var(--sev-certain)" },
+    { label: "High", value: a?.by_confidence?.HIGH ?? 0, color: "var(--sev-high)" },
+    { label: "Medium", value: a?.by_confidence?.MEDIUM ?? 0, color: "var(--sev-medium)" },
   ]
   const totalFiles = (a?.files_scanned ?? 0) + (a?.files_skipped ?? 0)
 
   const TILES = a
     ? [
-        { label: "Findings", value: a.total_findings, color: "var(--wall-text)" },
-        { label: "Block-eligible", value: a.block_eligible, color: a.block_eligible > 0 ? "var(--wall-act-failed)" : "var(--wall-sev-clean)" },
-        { label: "Advisory", value: advisory, color: "var(--wall-sev-medium)" },
-        { label: "Files scanned", value: a.files_scanned, color: "var(--wall-text)" },
+        { label: "Findings", value: a.total_findings, color: "var(--text)" },
+        { label: "Block-eligible", value: a.block_eligible, color: a.block_eligible > 0 ? "var(--sev-certain)" : "var(--sev-clean)" },
+        { label: "Advisory", value: advisory, color: "var(--sev-medium)" },
+        { label: "Files scanned", value: a.files_scanned, color: "var(--text)" },
       ]
     : []
 
@@ -83,8 +83,8 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate font-mono text-sm" style={{ color: "var(--wall-text)" }}>{shortRef(scan.ref)}</div>
-          <div className="text-xs" style={{ color: "var(--wall-faint)" }}>{scan.source} · scan #{scan.id} · {scan.status} · {formatDuration(scan.duration_ms)}</div>
+          <div className="truncate font-mono text-sm" style={{ color: "var(--text)" }}>{shortRef(scan.ref)}</div>
+          <div className="text-xs" style={{ color: "var(--text-faint)" }}>{scan.source} · scan #{scan.id} · {scan.status} · {formatDuration(scan.duration_ms)}</div>
         </div>
         {scan.findings.length > 0 && (
           <button
@@ -98,9 +98,9 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
       </div>
 
       {fallback && (
-        <div className="space-y-2 rounded-md p-3" style={{ border: "1px solid var(--wall-line)" }}>
-          <p className="text-xs" style={{ color: "var(--wall-muted)" }}>Clipboard was blocked — select all (Ctrl/Cmd-A) inside the box and copy manually.</p>
-          <textarea readOnly value={fallback} onFocus={(e) => e.currentTarget.select()} autoFocus className="h-48 w-full resize-y rounded bg-transparent p-2 font-mono text-xs" style={{ color: "var(--wall-text)", border: "1px solid var(--wall-line)" }} />
+        <div className="space-y-2 rounded-md p-3" style={{ border: "1px solid var(--line)" }}>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>Clipboard was blocked — select all (Ctrl/Cmd-A) inside the box and copy manually.</p>
+          <textarea readOnly value={fallback} onFocus={(e) => e.currentTarget.select()} autoFocus className="h-48 w-full resize-y rounded bg-transparent p-2 font-mono text-xs" style={{ color: "var(--text)", border: "1px solid var(--line)" }} />
         </div>
       )}
 
@@ -109,7 +109,7 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {TILES.map((t) => (
             <div key={t.label} className="wall-card flex flex-col gap-1 p-4">
-              <div className="text-xs uppercase tracking-wide" style={{ color: "var(--wall-faint)" }}>{t.label}</div>
+              <div className="wall-label">{t.label}</div>
               <div className="wall-num text-4xl leading-none" style={{ color: t.color }}>{formatNumber(t.value)}</div>
             </div>
           ))}
@@ -121,7 +121,7 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
         <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-3">
           <Donut title="By check" segments={ruleSegments} centerSub="findings" />
           <Donut title="By severity" segments={sevSegments} centerSub="findings" />
-          <RingGauge title="File coverage" value={a.files_scanned} max={totalFiles} color="var(--wall-cyan)" centerSub={`of ${formatNumber(totalFiles)}`} />
+          <RingGauge title="File coverage" value={a.files_scanned} max={totalFiles} color="var(--accent-cyan)" centerSub={`of ${formatNumber(totalFiles)}`} />
         </div>
       )}
 
@@ -131,12 +131,12 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
           {RULE_ORDER.map((id) => {
             const count = a.by_rule?.[id] ?? 0
             return (
-              <div key={id} className="flex items-center justify-between gap-3 rounded-lg p-3" style={{ border: "1px solid var(--wall-line)", background: "var(--wall-bg-deep)" }}>
+              <div key={id} className="flex items-center justify-between gap-3 rounded-lg p-3" style={{ border: "1px solid var(--line)", background: "var(--bg-deep)" }}>
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: count > 0 ? RULE_COLOR[id] : "var(--wall-sev-clean)", boxShadow: count > 0 ? `0 0 8px ${RULE_COLOR[id]}` : "none" }} aria-hidden />
-                  <span className="truncate text-sm" style={{ color: "var(--wall-text)" }}>{CHECKS[id]?.name ?? id}</span>
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: count > 0 ? RULE_COLOR[id] : "var(--sev-clean)", boxShadow: count > 0 ? `0 0 8px ${RULE_COLOR[id]}` : "none" }} aria-hidden />
+                  <span className="truncate text-sm" style={{ color: "var(--text)" }}>{CHECKS[id]?.name ?? id}</span>
                 </span>
-                <span className="wall-num text-lg" style={{ color: count > 0 ? "var(--wall-text)" : "var(--wall-faint)" }}>{count}</span>
+                <span className="wall-num text-lg" style={{ color: count > 0 ? "var(--text)" : "var(--text-faint)" }}>{count}</span>
               </div>
             )
           })}
@@ -144,8 +144,8 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
       )}
 
       {scan.files_skipped > 0 && (
-        <div className="flex items-start gap-2 rounded-md p-3 text-sm" style={{ color: "var(--wall-muted)", background: "rgba(255,200,61,0.06)", border: "1px solid rgba(255,200,61,0.2)" }}>
-          <FileWarning className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--wall-sev-medium)" }} aria-hidden />
+        <div className="flex items-start gap-2 rounded-md p-3 text-sm" style={{ color: "var(--text-muted)", background: "rgba(255,200,61,0.06)", border: "1px solid rgba(255,200,61,0.2)" }}>
+          <FileWarning className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--sev-medium)" }} aria-hidden />
           <span>{scan.files_skipped} file(s) skipped (size/type caps) — not analyzed, so some findings may be missing. We never pretend to have checked what we didn&apos;t.</span>
         </div>
       )}
@@ -155,8 +155,8 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
           force `clean` false server-side (coverage.summarize), so this can never sit
           next to an "All clear". */}
       {(a?.files_suppressed ?? 0) > 0 && (
-        <div className="flex items-start gap-2 rounded-md p-3 text-sm" style={{ color: "var(--wall-muted)", background: "rgba(255,200,61,0.06)", border: "1px solid rgba(255,200,61,0.2)" }}>
-          <FileWarning className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--wall-sev-medium)" }} aria-hidden />
+        <div className="flex items-start gap-2 rounded-md p-3 text-sm" style={{ color: "var(--text-muted)", background: "rgba(255,200,61,0.06)", border: "1px solid rgba(255,200,61,0.2)" }}>
+          <FileWarning className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--sev-medium)" }} aria-hidden />
           <span>
             {a?.files_suppressed} director{(a?.files_suppressed ?? 0) === 1 ? "y was" : "ies were"} excluded by this
             repository&apos;s own ignore rules and {(a?.files_suppressed ?? 0) === 1 ? "was" : "were"} not examined.
@@ -169,20 +169,20 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
           nothing found but three checks skipped is inconclusive, and says so. */}
       {scan.status === "completed" && scan.findings.length === 0 && (
         a?.clean ? (
-          <div className="flex flex-col items-center gap-3 rounded-xl p-10 text-center" style={{ border: "1px solid var(--wall-line)" }}>
-            <CheckCircle2 className="h-10 w-10" style={{ color: "var(--wall-sev-clean)" }} aria-hidden />
-            <h2 className="font-display text-xl font-bold" style={{ color: "var(--wall-text)" }}>All clear</h2>
-            <p className="text-sm" style={{ color: "var(--wall-muted)" }}>
+          <div className="flex flex-col items-center gap-3 rounded-xl p-10 text-center" style={{ border: "1px solid var(--line)" }}>
+            <CheckCircle2 className="h-10 w-10" style={{ color: "var(--sev-clean)" }} aria-hidden />
+            <h2 className="font-display text-xl font-bold" style={{ color: "var(--text)" }}>All clear</h2>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
               All {a.rules_total} checks ran and found nothing.
             </p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-3 rounded-xl p-10 text-center" style={{ border: "1px solid rgba(255,200,61,0.25)", background: "rgba(255,200,61,0.04)" }}>
-            <AlertTriangle className="h-10 w-10" style={{ color: "var(--wall-sev-medium)" }} aria-hidden />
-            <h2 className="font-display text-xl font-bold" style={{ color: "var(--wall-text)" }}>
+            <AlertTriangle className="h-10 w-10" style={{ color: "var(--sev-medium)" }} aria-hidden />
+            <h2 className="font-display text-xl font-bold" style={{ color: "var(--text)" }}>
               No problems found in what was scanned
             </h2>
-            <p className="max-w-xl text-sm" style={{ color: "var(--wall-muted)" }}>
+            <p className="max-w-xl text-sm" style={{ color: "var(--text-muted)" }}>
               {a
                 ? `${a.rules_ran} of ${a.rules_total} checks ran. This is not a clean bill of health — see what was checked below.`
                 : "Coverage wasn't recorded for this scan, so we can't say every check ran."}
@@ -201,7 +201,7 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
         return (
           <section key={g.confidence} className="space-y-3">
             <h3 className="wall-label">
-              {g.confidence} <span style={{ color: "var(--wall-faint)" }}>· {CONFIDENCE_LABEL[g.confidence]} ({g.items.length})</span>
+              {g.confidence} <span style={{ color: "var(--text-faint)" }}>· {CONFIDENCE_LABEL[g.confidence]} ({g.items.length})</span>
             </h3>
             {g.items.slice(0, limit).map((f, i) => <FindingCard key={`${g.confidence}-${i}`} finding={f} />)}
             {remaining > 0 && (
@@ -226,30 +226,30 @@ export function ScanResults({ scan }: { scan: ScanDetail }) {
           <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
             {scan.resolved_sha && (
               <div className="flex gap-2">
-                <dt style={{ color: "var(--wall-faint)" }}>Commit</dt>
-                <dd className="font-mono" style={{ color: "var(--wall-text)" }}>{scan.resolved_sha.slice(0, 12)}</dd>
+                <dt style={{ color: "var(--text-faint)" }}>Commit</dt>
+                <dd className="font-mono" style={{ color: "var(--text)" }}>{scan.resolved_sha.slice(0, 12)}</dd>
               </div>
             )}
             {scan.content_hash && (
               <div className="flex gap-2">
-                <dt style={{ color: "var(--wall-faint)" }}>Content hash</dt>
-                <dd className="font-mono" style={{ color: "var(--wall-text)" }}>{scan.content_hash.slice(0, 16)}…</dd>
+                <dt style={{ color: "var(--text-faint)" }}>Content hash</dt>
+                <dd className="font-mono" style={{ color: "var(--text)" }}>{scan.content_hash.slice(0, 16)}…</dd>
               </div>
             )}
             {scan.file_count !== null && (
               <div className="flex gap-2">
-                <dt style={{ color: "var(--wall-faint)" }}>Files analyzed</dt>
-                <dd className="wall-num" style={{ color: "var(--wall-text)" }}>{formatNumber(scan.file_count)}</dd>
+                <dt style={{ color: "var(--text-faint)" }}>Files analyzed</dt>
+                <dd className="wall-num" style={{ color: "var(--text)" }}>{formatNumber(scan.file_count)}</dd>
               </div>
             )}
             {scan.engine_versions?.rules_version && (
               <div className="flex gap-2">
-                <dt style={{ color: "var(--wall-faint)" }}>Rule set</dt>
-                <dd className="font-mono" style={{ color: "var(--wall-text)" }}>v{scan.engine_versions.rules_version}</dd>
+                <dt style={{ color: "var(--text-faint)" }}>Rule set</dt>
+                <dd className="font-mono" style={{ color: "var(--text)" }}>v{scan.engine_versions.rules_version}</dd>
               </div>
             )}
           </dl>
-          <p className="mt-2 text-xs" style={{ color: "var(--wall-faint)" }}>
+          <p className="mt-2 text-xs" style={{ color: "var(--text-faint)" }}>
             Re-scanning identical code produces a new scan number with this same content hash —
             proof it was freshly re-analyzed, not served from a cache.
           </p>

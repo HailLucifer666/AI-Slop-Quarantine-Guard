@@ -222,3 +222,156 @@ async def test_registry_unknown_is_high_advisory():
     assert len(findings) == 1
     assert findings[0].confidence is Confidence.HIGH
     assert findings[0].block_eligible is False
+
+
+# --- workspace/fixture downgrades (scan #20 finding 1) ----------------------
+
+# Probes (2026-11-12, run and restored): disabling the diff-manifest name union
+# in dependencies.py reded exactly
+# test_manifest_declared_name_downgraded_from_diff_manifests; removing the
+# fixture-path rung reded test_fixture_path_manifest_downgraded; the plain-404
+# negative control stayed green throughout — the downgrades never switch
+# SQG001's block off.
+
+_PKG_DIFF = """\
+--- a/app/package.json
++++ b/app/package.json
+@@ -1,1 +1,1 @@
+-{}
++{"name": "app", "dependencies": {"helper": "1.0.0"}}
+"""
+
+
+@pytest.mark.asyncio
+async def test_workspace_declared_name_downgraded():
+    # A public-registry 404 for a name THIS repo declares is a workspace-internal
+    # package, not a hallucination (scan-mode set arrives via repo_context,
+    # per-ecosystem: an npm declaration answers only npm questions).
+    files = {"app/package.json": '{"name": "app", "dependencies": {"helper": "1.0.0"}}'}
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    ctx["workspace_names"] = {"npm": {"helper"}}
+    findings = await check_dependencies(_PKG_DIFF, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+    assert "manifest in this repo declares" in f.message
+
+
+@pytest.mark.asyncio
+async def test_workspace_downgrade_is_ecosystem_scoped():
+    # Review finding (2026-11-12): an npm declaration answers npm questions only.
+    # A PyPI 404 of the same name is still a hallucinated package and must block.
+    files = {"requirements.txt": "helper==1.0.0\n"}
+    diff = (
+        "--- a/requirements.txt\n+++ b/requirements.txt\n"
+        "@@ -1,1 +1,2 @@\n requests==2.31.0\n+helper==1.0.0\n"
+    )
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    ctx["workspace_names"] = {"npm": {"helper"}}
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.CERTAIN
+    assert f.block_eligible is True
+
+
+@pytest.mark.asyncio
+async def test_pypi_name_normalization_matches_declared_name():
+    # Review finding (2026-11-12): PEP 503 normalization — a pyproject declaring
+    # `my_lib` while the dependency spells it `my-lib` is the repo's own package
+    # either way; the raw-string membership test used to block on it.
+    files = {"requirements.txt": "my-lib==0.1.0\n"}
+    diff = (
+        "--- a/requirements.txt\n+++ b/requirements.txt\n"
+        "@@ -1,1 +1,2 @@\n requests==2.31.0\n+my-lib==0.1.0\n"
+    )
+    ctx = _ctx(files, {"my-lib": Existence.MISSING})
+    ctx["workspace_names"] = {"pypi": {"my_lib"}}
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_manifest_declared_name_downgraded_from_diff_manifests():
+    # PR mode has no workspace set — the detector derives it from the manifests the
+    # diff itself touches (a new workspace package added in the same PR).
+    files = {
+        "packages/helper/package.json": '{"name": "helper"}',
+        "app/package.json": '{"dependencies": {"helper": "1.0.0"}}',
+    }
+    diff = (
+        _PKG_DIFF
+        + "--- a/packages/helper/package.json\n"
+        + "+++ b/packages/helper/package.json\n"
+        + "@@ -0,0 +1,1 @@\n"
+        + '+{"name": "helper"}\n'
+    )
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_fixture_path_manifest_downgraded():
+    # scan #20 finding 1: a fixture manifest under evals/.../fixtures/ carries a
+    # fake package on purpose — surfaced as advisory, never blocked.
+    fixture_diff = _PKG_DIFF.replace("app/", "evals/triage-finding/fixtures/repo/")
+    files = {"evals/triage-finding/fixtures/repo/package.json": '{"dependencies": {"helper": "1.0.0"}}'}
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(fixture_diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+    assert "test/fixture path" in f.message
+
+
+@pytest.mark.asyncio
+async def test_fixture_declared_name_does_not_legitimize_production_404():
+    # Review finding (2026-11-12): a fixture manifest's declared name must not feed
+    # the workspace rung — a production-path 404 of that name is still a block.
+    # The fixture manifest itself is skipped during collection (its own 404, if it
+    # had one, is carried by the fixture-path rung alone).
+    files = {
+        "app/package.json": '{"dependencies": {"helper": "1.0.0"}}',
+        "tests/fixtures/demo/package.json": '{"name": "helper"}',
+    }
+    diff = (
+        _PKG_DIFF
+        + "--- a/tests/fixtures/demo/package.json\n"
+        + "+++ b/tests/fixtures/demo/package.json\n"
+        + "@@ -0,0 +1,1 @@\n"
+        + '+{"name": "helper"}\n'
+    )
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.CERTAIN
+    assert f.block_eligible is True
+
+
+@pytest.mark.asyncio
+async def test_plain_404_still_blocks_with_no_downgrade_signals():
+    # Negative control: without a workspace declaration or fixture path, a clean 404
+    # is still CERTAIN and block-eligible — the downgrades must not switch SQG001 off.
+    files = {"app/package.json": '{"dependencies": {"helper": "1.0.0"}}'}
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(_PKG_DIFF, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.CERTAIN
+    assert f.block_eligible is True

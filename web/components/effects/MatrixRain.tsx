@@ -6,7 +6,7 @@ import { useReducedMotion } from "@/components/wall/useReducedMotion"
 
 /**
  * Falling-dot matrix rain — original 2D-canvas implementation (the reference txt
- * was empty). Neon teal/indigo trails on near-black; DPR-capped for 4K crispness,
+ * was empty). Neon cyan/violet trails on near-black; DPR-capped for 4K crispness,
  * 60fps, GPU-light (no WebGL). Pauses when hidden; reduced-motion → static field.
  */
 const GLYPHS = "01<>/\\[]{}#*+·:".split("")
@@ -51,7 +51,7 @@ export default function MatrixRain() {
         for (let i = 0; i < cols; i++) {
           const x = i * font
           const y = drops[i] * font
-          ctx.fillStyle = i % 3 === 0 ? "#16e0e0" : "#5b6bff"
+          ctx.fillStyle = i % 3 === 0 ? "#16e0e0" : "#8b5cf6" // --accent-cyan / --accent-violet (hex: canvas can't read CSS vars)
           ctx.globalAlpha = 0.85
           ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], x, y)
           ctx.globalAlpha = 1
@@ -70,7 +70,7 @@ export default function MatrixRain() {
       for (let i = 0; i < cols; i++) {
         for (let j = 0; j < rows; j++) {
           if (Math.random() > 0.9) {
-            ctx.fillStyle = i % 3 === 0 ? "rgba(22,224,224,0.22)" : "rgba(91,107,255,0.2)"
+            ctx.fillStyle = i % 3 === 0 ? "rgba(22,224,224,0.22)" : "rgba(139,92,246,0.2)"
             ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], i * font, j * font * 1.6)
           }
         }

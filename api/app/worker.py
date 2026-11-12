@@ -24,7 +24,7 @@ from app.analyzers.sast import check_sast
 from app.analyzers.licenses import check_licenses
 from app.analyzers.typosquat import check_typosquat
 from app.analyzers.simplify import check_simplify
-from app.cache import cached_existence, cached_license, cached_osv_batch
+from app.cache import cached_existence, cached_license, cached_osv_batch, cached_registry_created
 from app.analyzers.base import finalize
 from app.checks import (
     apply_block_eligibility,
@@ -200,8 +200,13 @@ async def _run_pr_analysis(
     for file_path, _line, _content in added:
         files[file_path] = files.get(file_path, 0) + 1
 
-    # check_exists injected so SQG001 uses the Redis-cached registry lookup.
-    repo_context = {"repo": repo, "head_sha": head_sha, "token": token, "check_exists": cached_existence}
+    # check_exists injected so SQG001 uses the Redis-cached registry lookup;
+    # created_fn likewise for SQG007's established-package gate (ADR-025).
+    repo_context = {
+        "repo": repo, "head_sha": head_sha, "token": token,
+        "check_exists": cached_existence,
+        "created_fn": cached_registry_created,
+    }
     disabled = settings.disabled_analyzer_ids
     # (rule id, thunk) — the kill-switch drops any disabled analyzer.
     runners = [
@@ -405,8 +410,25 @@ async def handle_scan_job(job: dict) -> None:
     heartbeat = asyncio.create_task(_heartbeat_loop(scan_id))
     try:
         await mark_running(scan_id)
-        ingested = ingest_codebase(source, ref)
+
+        # Progress reporting starts BEFORE ingest: cloning is the longest silent
+        # window for a big repo, and the queued+clone stretch is exactly what read
+        # as a hang on scans 21/22 (qwen-code, free-claude-code, 2026-11-12).
+        async def _progress(payload: dict) -> None:
+            # Best-effort: a progress-update failure must never fail the scan.
+            try:
+                await update_progress(scan_id, payload)
+            except Exception:  # noqa: BLE001
+                logger.debug("progress update dropped for scan %s", scan_id)
+
+        await _progress({"phase": "cloning", "index": 0, "total": 0, "findings_so_far": 0, "files_total": None})
+
+        # Ingest runs OFF the event loop: a synchronous clone/walk on the loop starved
+        # the heartbeat task (which could then let the reconcile watchdog reap a
+        # healthy scan) and froze all progress reporting for the whole download.
+        ingested = await asyncio.to_thread(ingest_codebase, source, ref)
         files = ingested.files
+        await _progress({"phase": "reading", "index": 0, "total": 0, "findings_so_far": 0, "files_total": len(files)})
 
         # Record the snapshot before analyzing it, so even a scan that dies mid-analysis
         # still proves which commit and which file set it was looking at.
@@ -416,13 +438,6 @@ async def handle_scan_job(job: dict) -> None:
             content_hash=content_hash(files),
             file_count=len(files),
         )
-
-        async def _progress(payload: dict) -> None:
-            # Best-effort: a progress-update failure must never fail the scan.
-            try:
-                await update_progress(scan_id, payload)
-            except Exception:  # noqa: BLE001
-                logger.debug("progress update dropped for scan %s", scan_id)
 
         result = await run_scan(
             files, ingested.skipped, on_progress=_progress,

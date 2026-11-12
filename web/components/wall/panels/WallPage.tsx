@@ -13,10 +13,14 @@ export function WallPage({ title, children }: { title: string; children: React.R
   return (
     <>
       <div className="flex items-center gap-3 px-4 pt-3 md:px-6">
-        <Link href="/dashboard" className="wall-click wall-focus flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-[color:var(--wall-muted)] transition-colors hover:text-[color:var(--wall-text)]">
+        <Link
+          href="/dashboard"
+          className="wall-click wall-focus flex min-h-[44px] items-center gap-1.5 rounded-md px-2.5 text-sm transition-colors"
+          style={{ color: "var(--text-muted)" }}
+        >
           <ArrowLeft className="h-4 w-4" aria-hidden /> Command
         </Link>
-        <span className="wall-label" style={{ color: "var(--wall-text)" }}>{title}</span>
+        <span className="wall-label" style={{ color: "var(--text)" }}>{title}</span>
       </div>
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 md:px-6">{children}</main>
     </>
