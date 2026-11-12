@@ -13,6 +13,7 @@ Two hard rules, both inherited from the analyzers' honesty model:
 
 import json
 import logging
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -20,7 +21,11 @@ import httpx
 from app.analyzers.licenses import fetch_license as _fetch_license
 from app.analyzers.vulns import query_osv as _query_osv, query_osv_batch as _query_osv_batch
 from app.queue import get_redis
-from app.registries import Existence, check_exists as _check_exists
+from app.registries import (
+    Existence,
+    check_exists as _check_exists,
+    registry_created_at as _registry_created_at,
+)
 
 logger = logging.getLogger("cache")
 
@@ -54,6 +59,25 @@ async def cached_existence(
     result = await _check_exists(ecosystem, name, client)
     if result is not Existence.UNKNOWN:
         await _set(key, result.value)
+    return result
+
+
+async def cached_registry_created(
+    ecosystem: str, name: str, client: httpx.AsyncClient
+) -> Optional[datetime]:
+    """``registries.registry_created_at`` with a Redis cache. None (outage, unknown
+    name, field missing) is NEVER cached — same rule as existence UNKNOWN: caching
+    an non-answer would persist a transient gap into a stale "can't verify"."""
+    key = f"sqg:created:{ecosystem}:{name}"
+    hit = await _get(key)
+    if hit is not None:
+        try:
+            return datetime.fromisoformat(hit)
+        except ValueError:
+            pass
+    result = await _registry_created_at(ecosystem, name, client)
+    if result is not None:
+        await _set(key, result.isoformat())
     return result
 
 
