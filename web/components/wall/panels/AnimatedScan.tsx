@@ -111,7 +111,9 @@ export function AnimatedScan({
           ? "Starting…"
           : "—"
   const phaseCaption = stale
-    ? `No heartbeat for ${Math.floor(heartbeatAgeS! / 60)}m — worker may be stuck`
+    ? heartbeatAgeS! < 120
+      ? `No heartbeat for ${heartbeatAgeS}s — worker may be stuck`
+      : `No heartbeat for ${Math.floor(heartbeatAgeS! / 60)}m — worker may be stuck`
     : baseCaption
 
   const files = progress?.files_total ?? filesScanned ?? null

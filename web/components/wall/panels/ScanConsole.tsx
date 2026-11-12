@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { ArrowUpRight, FileArchive, FolderOpen, Github, Loader2, ScanLine } from "lucide-react"
 
 import { getScan, startLocalScan, startUrlScan, startZipScan } from "@/lib/api"
@@ -50,14 +50,33 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
   const [phase, setPhase] = useState("")
   const [error, setError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  // Set on unmount so a poll loop outliving the component stops quietly instead of
+  // hammering the API for its full window (review finding, 2026-11-13).
+  const pollAborted = useRef(false)
+  useEffect(() => () => { pollAborted.current = true }, [])
 
   const poll = useCallback(async (id: number) => {
     const deadline = Date.now() + MAX_POLL_MS
+    // One failed poll (laptop sleep, API redeploy, a transient 500) must not end a
+    // 30-minute wait — the whole point of this loop. Tolerate a streak of failures
+    // and only surface them when contact is genuinely lost.
+    let failures = 0
     while (Date.now() < deadline) {
-      const s = await getScan(id)
+      let s: ScanDetail
+      try {
+        s = await getScan(id)
+        failures = 0
+      } catch {
+        failures += 1
+        if (failures >= 3)
+          throw new Error("Lost contact with the scanner API — check that it is running, then try again.")
+        await new Promise((r) => setTimeout(r, POLL_MS))
+        continue
+      }
       setScan(s)
       setPhase(s.status === "running" ? "Analyzing codebase…" : s.status === "queued" ? "Queued…" : "")
       if (isTerminal(s.status)) return s
+      if (pollAborted.current) return s // component unmounted; stop quietly
       await new Promise((r) => setTimeout(r, POLL_MS))
     }
     throw new Error(
@@ -70,6 +89,7 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
     setBusy(true)
     setScan(null)
     setPhase("Starting…")
+    pollAborted.current = false
     try {
       let id: number
       if (mode === "url") {

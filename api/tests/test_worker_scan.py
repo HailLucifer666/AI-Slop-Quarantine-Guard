@@ -181,9 +181,9 @@ async def test_scan_job_reports_progress_through_every_phase(scan_store, monkeyp
     # window wrote NOTHING while the analyzer loop wrote transiently. The worker must
     # report cloning before ingest, reading with the true file count after it, and the
     # per-analyzer phases — with progress cleared on completion (existing contract).
-    # Probe (2026-11-13, run and restored): disabling the cloning/reading emissions reds
-# this test exactly (phases[0] becomes the first analyzer); disabling the
-# store queue_position branch reds both scan-api position tests.
+    # Probe (2026-11-13, run and restored): disabling the cloning/reading emissions
+    # reds this test exactly (phases[0] becomes the first analyzer); disabling the
+    # store queue_position branch reds both scan-api position tests.
     scan_id = await store.create_scan("local", "/proj")
     files = {"config.py": 'KEY = "AKIAIOSFODNN7REALKEY"\nx = 1\n'}
     monkeypatch.setattr(

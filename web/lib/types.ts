@@ -195,9 +195,6 @@ export interface ScanSummary {
   created_at: string | null
   completed_at: string | null
   heartbeat_at: string | null
-  /** How many queued scans precede this one — set only while status is queued
-   * (0 = next up; a running scan is not queued and counts for nobody). */
-  queue_position?: number | null
   /** Provenance: exactly what was analyzed. A re-scan of unchanged code produces a NEW
    * id with a MATCHING content_hash — evidence of a fresh run, not a cached one. */
   resolved_sha: string | null
@@ -209,6 +206,11 @@ export interface ScanSummary {
 
 export interface ScanDetail extends ScanSummary {
   findings: Finding[]
+  /** How many queued scans precede this one — set by the DETAIL endpoint only
+   * while status is queued (0 = next up; a running scan is not queued and counts
+   * for nobody). The list endpoint never sets it: computing it per row would be
+   * a count per scan (review finding, 2026-11-13). */
+  queue_position?: number | null
 }
 
 export interface ScanListPage {

@@ -340,11 +340,6 @@ async def _queued_ahead(session, scan_id: int) -> int:
     return int(result.scalar_one())
 
 
-async def queued_ahead(scan_id: int) -> int:
-    """Public wrapper for tests and callers without a session handy."""
-    async with async_session() as session:
-        return await _queued_ahead(session, scan_id)
-
 
 async def list_scans(limit: int = 50, offset: int = 0) -> list[dict]:
     """Most-recent scans first (summary only, no findings) for the dashboard list."""
