@@ -5,19 +5,17 @@ confident we are, whether it may block, the advisories behind it, a remediation,
 provenance (which analyzer and engine version produced it) that lets a reader re-check
 the claim rather than trust it. ``finalize`` stamps the fingerprint and evidence hash on
 the way out so no rule can forget to.
-
-The ``Analyzer`` protocol at the bottom of this file describes a shape nothing in the
-codebase actually uses — see the note on the class itself.
 """
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import List, Protocol, Optional
+from typing import List, Optional
 from enum import Enum
 
 # Revision of the built-in rule set. Bump on any change to detection logic so findings
 # recorded by different revisions stay distinguishable in a stored scan.
-RULE_VERSION = "1.0"
+# 1.1 — 2026-11-12: SQG002 key-material requirement + label-echo skip; SQG003 TODO marker forms.
+RULE_VERSION = "1.1"
 
 
 class Confidence(str, Enum):
@@ -158,32 +156,3 @@ def finalize(findings: List["Finding"]) -> List["Finding"]:
             snippet = (finding.evidence.snippet or "").encode("utf-8", errors="replace")
             finding.evidence_hash = hashlib.sha256(snippet).hexdigest()[:16]
     return findings
-
-
-class Analyzer(Protocol):
-    """A shape no analyzer implements — kept as a record of an intent, not a contract.
-
-    This used to be annotated "implemented in Phase 3". Phase 3 shipped and took a
-    different route: all eight checks are module-level async functions with the signature
-    ``check_x(diff, repo_context) -> List[Finding]`` (see ``dependencies.py`` and its
-    siblings), collected by the explicit list in ``scan.py::run_scan`` rather than by any
-    class implementing ``analyze``. Nothing type-checks against this protocol and nothing
-    satisfies it.
-
-    Left in place rather than deleted because removing it is a separate call from
-    correcting the comment that misdescribed it. If the function signature is the intended
-    contract, this belongs in the bin; if a plugin interface is still wanted, this needs
-    rewriting around the signature the analyzers actually have.
-    """
-
-    async def analyze(self, diff: str, repo_context: dict) -> List[Finding]:
-        """Run analysis on a PR diff.
-
-        Args:
-            diff: Unified diff text.
-            repo_context: Repository context (manifest data, etc.).
-
-        Returns:
-            List of findings.
-        """
-        ...

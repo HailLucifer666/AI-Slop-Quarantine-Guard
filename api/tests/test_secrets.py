@@ -144,15 +144,20 @@ async def test_private_key_block_blocks():
 
 @pytest.mark.asyncio
 async def test_distinctive_token_in_test_path_is_advisory_not_blocked():
-    """A distinctive token in a test/fixture path is surfaced but NEVER block-eligible
-    (committed test material must not falsely block — honors the 'never falsely block' promise)."""
+    """A distinctive token WITH key material in a test/fixture path is surfaced but NEVER
+    block-eligible (committed test material must not falsely block — honors the 'never
+    falsely block' promise). Fixture carries a real base64 body: a header alone is
+    structurally not a secret anywhere (see test_bare_pem_headers_with_no_body...)."""
     for path in (
         "tests/fixtures/tls/server.key",
         "src/__tests__/keys.pem",
         "app/api.spec.ts",
         "examples/demo.py",
     ):
-        findings = await check_secrets(_diff(path, ["-----BEGIN RSA PRIVATE KEY-----"]), {})
+        findings = await check_secrets(_diff(path, [
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "MIIBVgIBADANBgkqhkiGCw0BAQEFAASCAUAwggE8AgEAAkEAq8ZxQ9kFhTQXvEx",
+        ]), {})
         assert len(findings) == 1, path
         assert findings[0].confidence is Confidence.HIGH, path
         assert findings[0].block_eligible is False, path
@@ -161,10 +166,12 @@ async def test_distinctive_token_in_test_path_is_advisory_not_blocked():
 
 
 @pytest.mark.asyncio
-async def test_placeholder_key_in_example_or_docs_not_blocked():
-    """Placeholder keys in example/template/doc files, and truncated single-line PEMs
-    anywhere, are surfaced as advisory but NEVER block-eligible. Blocking on a
-    .env.example or a docs snippet would be a false block (promise violation)."""
+async def test_truncated_or_skeleton_keys_are_not_findings():
+    """A PEM header with no real key material anywhere near it — a truncated `...`
+    skeleton in an env example, a bare header in docs, a single-line placeholder
+    literal — is structurally not a secret and produces NO finding on any path.
+    (Previously these surfaced as HIGH advisories: the self-scan's doc/compose false
+    alarms. Key material is what we surface, never the public header string.)"""
     cases = [
         (".env.example", r"GITHUB_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"),
         ("docs/SECURITY.md", r"GITHUB_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\n..."),
@@ -173,6 +180,37 @@ async def test_placeholder_key_in_example_or_docs_not_blocked():
     ]
     for path, content in cases:
         findings = await check_secrets(_diff(path, [content]), {})
+        assert findings == [], path
+
+
+@pytest.mark.asyncio
+async def test_bare_pem_headers_with_no_body_are_not_findings():
+    """Bare PEM headers with no key body — the detection-pattern examples listed in a
+    security playbook (scan #27) or quoted in this repo's own docs and detector
+    docstrings (self-scan #15) — are not findings at all. A header alone carries no
+    key material, so there is nothing to surface and nothing to block on."""
+    findings = await check_secrets(_diff("security/security-senior-secops.md", [
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "-----BEGIN EC PRIVATE KEY-----",
+        "-----BEGIN PGP PRIVATE KEY-----",
+    ]), {})
+    assert findings == []
+    # normal-path source quoting a bare header (the detector's own docstring case)
+    findings = await check_secrets(_diff("app/analyzers/secrets.py", [
+        'PEM_TEMPLATE = "-----BEGIN RSA PRIVATE KEY-----"',
+    ]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_real_inline_body_pem_still_advisory():
+    """KEEPER against recall loss: real-shaped key material crammed onto one line
+    (an env-var string literal, as compose files actually embed keys) is still
+    surfaced — advisory HIGH, never block-eligible, on every path."""
+    for path in ("infra/docker-compose.yml", "app/config.py"):
+        findings = await check_secrets(_diff(path, [
+            r'KEY: "-----BEGIN RSA PRIVATE KEY-----\nMIIBVgIBADANBgkqhkiGCw0BAQEFAASCAUAwggE8AgEAAkEAq8ZxQ9kFhTQXvEx\n-----END RSA PRIVATE KEY-----"',
+        ]), {})
         assert len(findings) == 1, path
         assert findings[0].confidence is Confidence.HIGH, path
         assert findings[0].block_eligible is False, path
@@ -191,24 +229,6 @@ async def test_real_pem_in_normal_path_still_blocks():
     assert len(findings) == 1
     assert findings[0].confidence is Confidence.CERTAIN
     assert findings[0].block_eligible is True
-
-
-@pytest.mark.asyncio
-async def test_bare_pem_headers_no_body_are_advisory_not_blocked():
-    """Bare PEM headers with no key body — e.g. the three detection-pattern examples
-    listed in a security playbook (the real false block this fixed: scan #27 on
-    security/security-senior-secops.md) — are surfaced as advisory, NEVER block-eligible.
-    A header alone is not a provable secret, so blocking on it would be a false block."""
-    findings = await check_secrets(_diff("security/security-senior-secops.md", [
-        "-----BEGIN RSA PRIVATE KEY-----",
-        "-----BEGIN EC PRIVATE KEY-----",
-        "-----BEGIN PGP PRIVATE KEY-----",
-    ]), {})
-    assert len(findings) == 3
-    for f in findings:
-        assert f.confidence is Confidence.HIGH, f.message
-        assert f.block_eligible is False, f.message
-        assert "private key" in f.message.lower()
 
 
 @pytest.mark.asyncio
@@ -236,6 +256,86 @@ async def test_generic_password_advisory():
     f = findings[0]
     assert f.confidence is Confidence.HIGH
     assert f.block_eligible is False
+
+
+# --- prose values: English-phrase values are labels, not credentials --------
+
+@pytest.mark.asyncio
+async def test_prose_ui_label_value_not_flagged():
+    # A dashboard label whose KEY happens to contain "secret" — the VALUE is an
+    # English phrase (spaces, no digits, no symbols), not a credential. This exact
+    # line was a self-scan #15 false alarm on web/components/wall/panels/AnimatedScan.tsx.
+    findings = await check_secrets(_diff("web/components/wall/panels/AnimatedScan.tsx", [
+        '  secrets: "Leaked secrets",',
+    ]), {})
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_non_echoing_prose_value_still_surfaced():
+    """Recall-first (preflight REV finding): a spacey English-phrase value on a
+    credential-named key that does NOT echo its own name is ambiguous — a passphrase
+    looks exactly like this — so it stays surfaced as HIGH advisory. Only the echo
+    (a label naming its own category) is skipped."""
+    findings = await check_secrets(_diff("app/config.py", [
+        'secret_note = "rotate this credential soon"',
+    ]), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+
+
+@pytest.mark.asyncio
+async def test_passphrase_named_keys_still_flagged():
+    """KEEPER against recall loss: passphrases are the one credential class whose
+    values legitimately contain spaces — a password/passphrase-named key with a
+    spacey value must still surface as HIGH advisory."""
+    findings = await check_secrets(_diff("app/config.py", [
+        'password = "correct horse battery staple"',
+    ]), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_generic_secret_named_key_with_passphrase_value_still_flagged():
+    """KEEPER against recall loss (preflight REV finding): the prose skip must key on
+    the value ECHOING its own credential name — a passphrase-shaped value on a
+    generically-named key does not echo, so it must still surface."""
+    findings = await check_secrets(_diff("app/config.py", [
+        'SECRET = "correct horse battery staple"',
+    ]), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_pem_body_lookahead_stops_at_next_pem_marker():
+    """KEEPER against a false-CERTAIN vector (preflight REV finding): a bare private-key
+    header followed by a DIFFERENT PEM section's base64 (a certificate example) must
+    NOT reach CERTAIN — the key-material lookahead stops at the next BEGIN/END marker."""
+    findings = await check_secrets(_diff("SECURITY.md", [
+        "Our keys use PEM, e.g.",
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBVgIBADANBgkqhkiGCw0BAQEFAASCAUAwggE8AgEAAkEAq8ZxQ9kFhTQXvEx",
+        "-----END CERTIFICATE-----",
+    ]), {})
+    assert all(f.block_eligible is False for f in findings)
+    assert all(f.confidence is not Confidence.CERTAIN for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_generic_assignment_on_a_line_with_bare_header_still_flagged():
+    """KEEPER against a veto bug (preflight REV finding): a bare PEM header is nothing
+    to surface, but it must not silence a real credential-named assignment sharing
+    the line — the no-material skip does not set the one-finding-per-line veto."""
+    findings = await check_secrets(_diff("scripts/export.sh", [
+        'export API_KEY="abcd1234efgh"  # was: -----BEGIN PRIVATE KEY-----',
+    ]), {})
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
 
 
 # --- zero-FP controls ------------------------------------------------------

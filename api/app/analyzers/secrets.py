@@ -139,6 +139,13 @@ def _is_sequential_placeholder(v: str) -> bool:
 _SLUG_VALUE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _CONST_VALUE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+# A quoted value that reads as an English phrase — letters, spaces, apostrophes,
+# hyphens, optional sentence punctuation, never a digit or symbol. Quoted tier only.
+_PROSE_VALUE = re.compile(r"^[A-Za-z][A-Za-z' \-]*[.!?]?$")
+# The credential-word family _ASSIGNMENT's name group matches. A UI label echoes its
+# own category name ("secrets: \"Leaked secrets\""); a real value does not.
+_CRED_WORD = re.compile(r"secret|token|pass(?:word|wd|phrase)|pwd|api[_-]?key|access[_-]?key", re.IGNORECASE)
+
 
 def _looks_nonsecret_value(value: str) -> bool:
     v = value.strip()
@@ -160,6 +167,21 @@ def _looks_nonsecret_value(value: str) -> bool:
     if _CONST_VALUE.match(v):
         return True
     return False
+
+
+def _is_label_echo(name: str, value: str) -> bool:
+    """True if a quoted value reads as an English phrase AND echoes the credential
+    word in its own key's name ("secrets: \\"Leaked secrets\\""). UI labels echo by
+    design; real values do not. Spacey values that do NOT echo — a passphrase on a
+    generically-named key — still surface: silence there would hide the one
+    credential class whose values legitimately contain spaces."""
+    m = _CRED_WORD.search(name)
+    return (
+        " " in value
+        and bool(_PROSE_VALUE.match(value))
+        and m is not None
+        and m.group(0).lower() in value.lower()
+    )
 
 
 def _is_allowlisted(line: str) -> bool:
@@ -243,9 +265,33 @@ def _has_key_body(added: list[tuple[int, str]], idx: int) -> bool:
     lines between header and body are tolerated by scanning a short window.
     """
     for _, line in added[idx + 1 : idx + 41]:
-        if _PEM_BODY.match(line.strip()):
+        stripped = line.strip()
+        if stripped.startswith("-----BEGIN") or stripped.startswith("-----END"):
+            # Another PEM section started before any body line appeared: base64
+            # after this point belongs to THAT section (e.g. a certificate example
+            # following our bare header), not to the key we are checking.
+            return False
+        if _PEM_BODY.match(stripped):
             return True
     return False
+
+
+# A substantial base64 run inside the SAME physical line as the BEGIN header — key
+# material crammed into a string literal (how env files and compose embed keys).
+_INLINE_BODY = re.compile(r"[A-Za-z0-9+/]{32,}")
+
+
+def _has_inline_body(after_header: str) -> bool:
+    """True if the text after a BEGIN header on the same physical line carries
+    real-looking key material — a substantial base64 run with no truncation.
+
+    ``after_header`` is everything following the matched header on the line. A
+    truncated skeleton (``-----BEGIN ...\\nMIIEpA...\\n-----END ...``) contains a
+    literal ``...``/`…` where body characters would be, and is never real material.
+    """
+    if "..." in after_header or "…" in after_header:
+        return False
+    return bool(_INLINE_BODY.search(after_header))
 
 
 def _advisory(label: str, match: str, path: str, line: int, note: str) -> Finding:
@@ -304,11 +350,30 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                 if _is_allowlisted(_window(content, m.start(), m.end())):
                     matched = True  # a real match existed here; don't also fall through to the generic tier
                     break
-                # A private-key header with no key body following it is illustrative
-                # (a detection pattern in a doc), never a real key → advisory, not block.
-                if label == "private key block" and not _has_key_body(added, idx):
-                    finding = _advisory(label, m.group(0), path, line, "header only, no key body")
-                elif in_test:
+                # A private-key header with no key material anywhere near it — a bare
+                # header quoted in a doc or this detector's own docstring, or a
+                # truncated `...` skeleton in an env value — is structurally not a
+                # secret: nothing to surface on ANY path, and it must never fall
+                # through to _certain below (that would falsely block).
+                if label == "private key block":
+                    multi_line_body = _has_key_body(added, idx)
+                    inline_body = _has_inline_body(content[m.end():])
+                    if not multi_line_body and not inline_body:
+                        # Nothing to surface — and nothing real matched, so do NOT
+                        # set the one-finding-per-line veto: a generic credential
+                        # assignment sharing this line must still be examined by
+                        # the tier below.
+                        continue
+                    if inline_body and not multi_line_body:
+                        # Real-shaped key material crammed onto one line (an env-var
+                        # string literal). Surfaced as advisory on every path — a
+                        # one-line literal is never upgraded to CERTAIN, so the
+                        # blocking surface is unchanged by this branch.
+                        findings.append(_advisory(label, m.group(0), path, line, "inline one-line key literal"))
+                        matched = True
+                        break
+                    # A multi-line key body follows: real key material — existing tiers.
+                if in_test:
                     finding = _certain_in_test(label, m.group(0), path, line)
                 elif in_example:
                     finding = _advisory(label, m.group(0), path, line, "in an example/template file")
@@ -322,9 +387,16 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
             if matched:
                 continue  # one finding per line; CERTAIN wins over HIGH
 
-            a = _ASSIGNMENT.search(content) or (
-                _ASSIGNMENT_UNQUOTED.search(content) if _DOTENV_PATH.search(path) else None
-            )
+            a = _ASSIGNMENT.search(content)
+            if a is not None and _is_label_echo(a.group("name"), a.group("value")):
+                # Quoted tier only: a phrase value that echoes its own credential
+                # name is a UI label, not a credential. Spacey non-echoing values
+                # (passphrases on generically-named keys) still surface below.
+                # Unquoted .env values with spaces stay advisory — genuinely
+                # ambiguous there.
+                continue
+            if a is None:
+                a = _ASSIGNMENT_UNQUOTED.search(content) if _DOTENV_PATH.search(path) else None
             if a:
                 # Generic credential-named assignments are FP-prone. Skip them in
                 # test/example/doc/compose paths (fixtures, not leaks), values that

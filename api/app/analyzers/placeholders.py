@@ -1,7 +1,7 @@
 """SQG003 — placeholder / incomplete code detector (Phase 3, regex MVP).
 
-Scans newly added lines for the tells of unfinished or stubbed-out code: TODO
-markers, NotImplementedError, ellipsis-only bodies, and "your code here" prose.
+Scans newly added lines for the tells of unfinished or stubbed-out code: TODO markers,
+NotImplementedError, ellipsis-only bodies, and "your code here" prose.
 
 Advisory only: every finding is MEDIUM confidence and never block-eligible — a
 TODO can be perfectly intentional. The job is to surface, not to gate. AST-aware
@@ -35,11 +35,18 @@ _ALLOWLIST = ("# noqa", "# type: ignore", "# pragma: no cover")
 _PATTERNS: list[tuple[str, re.Pattern]] = [
     (
         "TODO/FIXME marker",
-        # Case-insensitive: lowercase "todo"/"fixme" comments are just as real a
-        # signal as uppercase ones. XXX excludes a following "-<digit-or-X>" — that
-        # shape is a ticket-ID prefix (XXX-1234) or a masked value (XXX-XX-XXXX),
-        # not a placeholder marker.
-        re.compile(r"\b(?:TODO|FIXME|HACK)\b|\bXXX\b(?!-[\dXx])", re.IGNORECASE),
+        # TODO flags only in its marker forms — colon, dash, paren-attributed,
+        # @-prefixed, or bare at end of line — so prose that merely mentions the
+        # word ("there is still todo work") is not a stub. The other two marker
+        # arms keep their bare-word behavior: lowercase "fixme later" is pinned as
+        # a real signal. XXX excludes a following "-<digit-or-X>" — that shape is
+        # a ticket-ID prefix (XXX-1234) or a masked value (XXX-XX-XXXX), not a
+        # placeholder marker.
+        re.compile(
+            r"@TODO\b|\bTODO\b\s*(?:\([^)]*\)\s*)?(?:[:\-]|$)"
+            r"|\b(?:FIXME|HACK)\b|\bXXX\b(?!-[\dXx])",
+            re.IGNORECASE,
+        ),
     ),
     (
         "not-implemented stub",
