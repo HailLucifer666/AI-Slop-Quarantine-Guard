@@ -351,3 +351,68 @@ async def test_osv_outage_on_a_new_ecosystem_still_fails_safe():
     diff = _diff("pom.xml", POM.splitlines())
     ctx, kw = _ctx({"pom.xml": POM}, osv_down=True)
     assert await check_vulnerabilities(diff, ctx, **kw) == []
+
+
+# --- lockfile evidence anchor (scan #18: wrong entry cited) ------------------
+# Probe (2026-11-13, run and restored): disabling _anchored_lock_line reded both
+# tests below - both findings collapsed onto the first version line (2.19.0),
+# by_line collapsed to one key. The corpus known-cve-pin fixture anchors
+# correctly either way (single entry), which is why it cannot see this bug alone.
+
+@pytest.mark.asyncio
+async def test_lockfile_anchor_resolves_to_the_matching_entry():
+    # Scan-#18 bug shape: two lockfile entries with IDENTICAL version lines - the
+    # old first-match locator cited whichever entry came first, so one finding
+    # anchored inside a foreign package's entry. Each finding must anchor inside
+    # its own entry: the version line of the entry that declares the package.
+    content = (
+        '{"lockfileVersion": 3, "packages": {'
+        '"": {"name": "root"}, '
+        '"node_modules/other": {"version": "2.19.0"}, '
+        '"node_modules/requests": {"version": "2.19.0"}}}'
+    )
+    diff = _diff(
+        "package-lock.json",
+        [
+            '"node_modules/other": {',
+            '  "version": "2.19.0"',
+            '"node_modules/requests": {',
+            '  "version": "2.19.0"',
+        ],
+    )
+    ctx, kw = _ctx({"package-lock.json": content}, vulns=[{"id": "GHSA-xxxx"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 2
+    by_line = {f.line_start: f for f in findings}
+    assert "other" in by_line[2].message
+    assert "requests" in by_line[4].message
+
+
+@pytest.mark.asyncio
+async def test_lockfile_anchor_never_cites_a_foreign_version_line():
+    # Even when only ONE of the two identical-version entries is the vulnerable
+    # pin (here: only 'requests' has advisories in the fake OSV list), the
+    # finding must not borrow the other entry's version line as its anchor.
+    content = (
+        '{"lockfileVersion": 3, "packages": {'
+        '"": {"name": "root"}, '
+        '"node_modules/other": {"version": "2.19.0"}, '
+        '"node_modules/requests": {"version": "2.19.0"}}}'
+    )
+    diff = _diff(
+        "package-lock.json",
+        [
+            '"node_modules/other": {',
+            '  "version": "2.19.0"',
+            '"node_modules/requests": {',
+            '  "version": "2.19.0"',
+        ],
+    )
+    ctx, kw = _ctx({"package-lock.json": content}, vulns=[{"id": "GHSA-xxxx"}])
+    seen: list = []
+    ctx, kw = _ctx({"package-lock.json": content}, vulns=[{"id": "GHSA-xxxx"}], seen=seen)
+    # The fake OSV answers every pin with the same advisory list, so to isolate
+    # the anchor we filter to the requests finding instead of limiting the pins.
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    requests_finding = next(f for f in findings if "requests" in f.message)
+    assert requests_finding.line_start == 4
