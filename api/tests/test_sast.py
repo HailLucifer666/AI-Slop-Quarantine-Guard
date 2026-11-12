@@ -216,3 +216,33 @@ async def test_unterminated_block_comment_opening_line_not_flagged():
         "/* eval(userInput) is dangerous, this whole block is disabled:"
     ]), {})
     assert findings == []
+
+
+# --- usedforsecurity=False (scan #20 finding 9: git empty-blob hashing) -------
+# Probe (2026-11-13, run and restored): disabling the flag guard reded exactly the
+# suppress test while both negative controls stayed green.
+
+@pytest.mark.asyncio
+async def test_weak_hash_with_usedforsecurity_false_not_flagged():
+    # hashlib's own flag says this hash protects nothing (git blob hashing, cache
+    # keys). The flag must be on the SAME line as the call to count.
+    diff = _diff("scripts/hash.py", ['digest = hashlib.sha1(b"blob 0", usedforsecurity=False).hexdigest()'])
+    assert await check_sast(diff, {}) == []
+
+
+@pytest.mark.asyncio
+async def test_weak_hash_without_flag_still_flagged():
+    # Negative control: the guard must not switch the weak-hash rule off.
+    diff = _diff("scripts/hash.py", ["digest = hashlib.md5(data).hexdigest()"])
+    findings = await check_sast(diff, {})
+    assert len(findings) == 1
+    assert findings[0].rule_id == "SQG006"
+
+
+@pytest.mark.asyncio
+async def test_usedforsecurity_false_on_another_line_still_flagged():
+    # A multi-line call with the flag out of sight still surfaces — the same-line
+    # rule fails safe toward keep-the-finding.
+    diff = _diff("scripts/hash.py", ["digest = hashlib.sha1(", "    data, usedforsecurity=False,"])
+    findings = await check_sast(diff, {})
+    assert len(findings) == 1

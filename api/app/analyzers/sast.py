@@ -175,6 +175,12 @@ async def check_sast(diff: str, repo_context: dict) -> List[Finding]:
                     continue
                 if label == "unsafe yaml.load()" and _safeloader_follows(added, idx):
                     continue  # SafeLoader arrives a couple lines later — a safe multi-line call
+                if label == "weak hash (md5/sha1)" and "usedforsecurity=False" in content:
+                    # hashlib's own flag says this hash protects nothing (git blob
+                    # hashing, cache keys) — scan #20 finding 9 flagged exactly that
+                    # shape. Same line only: a multi-line call with the flag out of
+                    # sight still surfaces (fails safe toward keep-the-finding).
+                    continue
                 findings.append(
                     Finding(
                         category="sast",
