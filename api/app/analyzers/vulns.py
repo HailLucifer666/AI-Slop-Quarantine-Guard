@@ -271,6 +271,25 @@ def _severity_of(vulns: list) -> Optional[str]:
     return best.lower() if best else None
 
 
+def _cvss_vector_of(vulns: list) -> Optional[str]:
+    """The first CVSS vector OSV carries in its structured ``severity[]`` array, or
+    None. This is stored verbatim and never turned into a score or a label — the
+    vector is the fact; computing a score from it would be our own judgement
+    layered on top, and a vector must never masquerade as the advisory's severity
+    label (that lives in database_specific.severity when the source publishes one)."""
+    for vuln in vulns:
+        for entry in vuln.get("severity") or []:
+            if (
+                isinstance(entry, dict)
+                and isinstance(entry.get("type"), str)
+                and entry["type"].upper().startswith("CVSS")
+                and isinstance(entry.get("score"), str)
+                and entry["score"].upper().startswith("CVSS:")
+            ):
+                return entry["score"]
+    return None
+
+
 def _replacement_line(snippet: str, name: str, version: str, fixed: str) -> Optional[str]:
     """The manifest line rewritten to the patched version, or None if not derivable.
 
@@ -346,6 +365,7 @@ def _vuln_finding(
         rule_id=RULE_ID,
         advisories=advisories,
         severity=_severity_of(vulns),
+        cvss_vector=_cvss_vector_of(vulns),
         fix_versions=fixed,
         remediation=remediation,
         fix_suggestion=remediation.text if remediation else None,

@@ -351,3 +351,62 @@ async def test_osv_outage_on_a_new_ecosystem_still_fails_safe():
     diff = _diff("pom.xml", POM.splitlines())
     ctx, kw = _ctx({"pom.xml": POM}, osv_down=True)
     assert await check_vulnerabilities(diff, ctx, **kw) == []
+
+
+# --- severity + CVSS vector surfacing (scan #20: Low shown as HIGH) ----------
+# Probe (2026-11-13, run and restored): unwiring cvss_vector reds exactly the two
+# vector-asserting tests; the honest-null test passes on both shapes either way.
+# Premise (Step 0, 2026-11-12): the live OSV record for GHSA-474x-hrwr-fgx4
+# carries database_specific.severity LOW + a CVSS_V3 vector; scan #20 stored null
+# because the running worker predates the severity-population code. The web
+# FindingCard already renders finding.severity when present, so no UI change
+# rides here; its vitest pin lives with the dashboard branch's suite.
+
+@pytest.mark.asyncio
+async def test_ghsa_shape_surfaces_advisory_severity_and_vector():
+    # Scan #20's fast-xml-parser record, verified live 2026-11-12: OSV carries
+    # database_specific.severity LOW plus a CVSS_V3 vector, patched in 5.12.0.
+    # The finding must surface both — never the confidence label in severity's place.
+    vulns = [{
+        "id": "GHSA-474x-hrwr-fgx4",
+        "database_specific": {"severity": "LOW"},
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"}],
+        "affected": [{"ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "5.12.0"}]}]}],
+    }]
+    diff = _diff("package-lock.json", ['"node_modules/fast-xml-parser": {', '"version": "5.11.1"'])
+    content = '{"lockfileVersion": 3, "packages": {"": {}, "node_modules/fast-xml-parser": {"version": "5.11.1"}}}'
+    ctx, kw = _ctx({"package-lock.json": content}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "low"
+    assert f.cvss_vector == "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+
+
+@pytest.mark.asyncio
+async def test_vector_only_record_keeps_honest_null_severity():
+    # PYSEC/Go-shaped records carry only the severity[] array — no label exists, so
+    # severity stays null and the vector is stored verbatim. A vector must never
+    # masquerade as the advisory's severity label (that would be our own judgement).
+    vulns = [{
+        "id": "PYSEC-2026-0001",
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+    }]
+    diff = _diff("requirements.txt", ["requests==2.19.0"])
+    ctx, kw = _ctx({"requirements.txt": "requests==2.19.0\n"}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity is None
+    assert f.cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+
+@pytest.mark.asyncio
+async def test_no_severity_data_stays_null():
+    vulns = [{"id": "GHSA-plain", "affected": []}]
+    diff = _diff("requirements.txt", ["requests==2.19.0"])
+    ctx, kw = _ctx({"requirements.txt": "requests==2.19.0\n"}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    assert findings[0].severity is None
+    assert findings[0].cvss_vector is None
