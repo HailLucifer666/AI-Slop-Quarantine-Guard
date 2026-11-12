@@ -34,6 +34,7 @@ import httpx
 
 from app.diff import parse_diff
 from app.manifests import (
+    _yarn_name,
     extract_pinned_lockfile,
     lockfile_ecosystem,
     manifest_ecosystem,
@@ -223,17 +224,26 @@ def _find_lock_line(name: str, version: str, added: List[Tuple[int, str]], path:
     if anchored is not None:
         return anchored
 
+    # Prefer a line that names the package AND the version — under any format the
+    # structural walker doesn't cover, that line is still a true statement about
+    # this pin (review finding, 2026-11-13: a bare-version rung could cite another
+    # package's resolved-URL that merely embeds the version string).
+    both = [line_no for line_no, text in added if name in text and version in text]
+    if len(both) == 1:
+        return both[0]
+
     version_matches = [line_no for line_no, text in added if version in text]
     if len(version_matches) == 1:
         return version_matches[0]
 
-    # Ambiguous version, no structural match: anchor the package's own name line
-    # (its entry key / declared name) rather than a foreign version line.
-    return next((line_no for line_no, text in added if name in text), None)
+    # Ambiguous version, no structural match: anchor the package's own name line —
+    # matched as a whole token, so "foo" never lands inside "foobar"'s entry —
+    # rather than a foreign version line.
+    token = re.compile(rf"(?<![\w@/.-]){re.escape(name)}(?![\w.-])")
+    return next((line_no for line_no, text in added if token.search(text)), None)
 
 
 _NPM_ENTRY_KEY = re.compile(r'"(?:node_modules/)?([^"]+)":\s*\{')
-_YARN_ENTRY_HEADER = re.compile(r'^"?([^@,\s"]+)@[^:]*:\s*$')
 
 
 def _anchored_lock_line(
@@ -257,9 +267,13 @@ def _anchored_lock_line(
         current = None
         for line_no, text in added:
             stripped = text.strip()
-            header = _YARN_ENTRY_HEADER.match(stripped)
-            if header:
-                current = header.group(1)
+            if stripped.endswith(":") and "@" in stripped:
+                # Scoped names begin with '@' (@babel/core@^7.0.0) — derive the name
+                # with the parser's own rule instead of a second regex that disagrees
+                # with it (review finding, 2026-11-13). Multi-spec headers
+                # ("a@^1, a@^2":) resolve on their first descriptor.
+                first_spec = stripped.rstrip(":").strip('"').split(",")[0].strip()
+                current = _yarn_name(first_spec)
             elif current == name and stripped.startswith("version") and version in stripped:
                 return line_no
         return None

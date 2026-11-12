@@ -354,10 +354,11 @@ async def test_osv_outage_on_a_new_ecosystem_still_fails_safe():
 
 
 # --- lockfile evidence anchor (scan #18: wrong entry cited) ------------------
-# Probe (2026-11-13, run and restored): disabling _anchored_lock_line reded both
-# tests below - both findings collapsed onto the first version line (2.19.0),
-# by_line collapsed to one key. The corpus known-cve-pin fixture anchors
-# correctly either way (single entry), which is why it cannot see this bug alone.
+# Probe (2026-11-13, run and restored): disabling _anchored_lock_line reds both
+# tests below - with the walker gone, the findings re-anchored onto their own
+# header lines (1 and 3) instead of version lines (2 and 4), via the fallback
+# rungs. (The corpus known-cve-pin fixture cannot see this bug at all: single
+# entry, correct under every locator - which is exactly why these tests exist.)
 
 @pytest.mark.asyncio
 async def test_lockfile_anchor_resolves_to_the_matching_entry():
@@ -416,3 +417,77 @@ async def test_lockfile_anchor_never_cites_a_foreign_version_line():
     findings = await check_vulnerabilities(diff, ctx, **kw)
     requests_finding = next(f for f in findings if "requests" in f.message)
     assert requests_finding.line_start == 4
+
+
+# --- review hardening (2026-11-13): scoped yarn + bounded rung 3 + formats ----
+
+@pytest.mark.asyncio
+async def test_yarn_scoped_collision_anchors_own_entry():
+    # Review probe (2026-11-13): scoped yarn headers ("@babel/core@^7.0.0":) begin
+    # with @, which the header regex excluded - the walker never matched, and with
+    # two same-version entries the anchor fell to the FIRST line containing the
+    # name substring: core-cli's header, a foreign package's entry.
+    content = (
+        '"@babel/core-cli@^7.0.0":\n'
+        '  version "7.18.6"\n'
+        '"@babel/core@^7.0.0":\n'
+        '  version "7.18.6"\n'
+    )
+    diff = _diff("yarn.lock", [
+        '"@babel/core-cli@^7.0.0":', '  version "7.18.6"',
+        '"@babel/core@^7.0.0":', '  version "7.18.6"',
+    ])
+    ctx, kw = _ctx({"yarn.lock": content}, vulns=[{"id": "GHSA-yyyy"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 2
+    by_pkg = {f.message.split("==")[0]: f for f in findings}
+    assert by_pkg["@babel/core"].line_start == 4
+    assert by_pkg["@babel/core-cli"].line_start == 2
+
+
+@pytest.mark.asyncio
+async def test_rung3_name_match_is_token_bounded():
+    # go.sum is a lockfile format the structural walker doesn't cover; its entries
+    # put name and version on ONE line. A bare substring rung anchored 'foo' on
+    # 'foobar's line when versions collided - the name must match as a whole token.
+    content = (
+        "example.com/foobar v1.0.0 h1:AAA=\n"
+        "example.com/foo v1.0.0 h1:BBB=\n"
+    )
+    diff = _diff("go.sum", [
+        "example.com/foobar v1.0.0 h1:AAA=",
+        "example.com/foo v1.0.0 h1:BBB=",
+    ])
+    ctx, kw = _ctx({"go.sum": content}, vulns=[{"id": "GHSA-gggg"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 2
+    by_pkg = {f.message.split("==")[0]: f for f in findings}
+    assert by_pkg["example.com/foo"].line_start == 2
+    assert by_pkg["example.com/foobar"].line_start == 1
+
+
+@pytest.mark.asyncio
+async def test_cargo_duplicate_names_anchor_per_block():
+    # Two Cargo [[package]] blocks with the same name at DIFFERENT versions: the
+    # TOML walker must anchor each pin inside its own block (pins the block reset).
+    content = (
+        "[[package]]\n"
+        'name = "serde"\n'
+        'version = "1.0.1"\n'
+        "[[package]]\n"
+        'name = "serde"\n'
+        'version = "1.0.9"\n'
+    )
+    diff = _diff("Cargo.lock", [
+        "[[package]]", 'name = "serde"', 'version = "1.0.1"',
+        "[[package]]", 'name = "serde"', 'version = "1.0.9"',
+    ])
+    ctx, kw = _ctx({"Cargo.lock": content}, vulns=[{"id": "GHSA-zzzz"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 2
+    by_version = {}
+    for f in findings:
+        ver = f.message.split("==")[1].split(" ")[0]
+        by_version[ver] = f.line_start
+    assert by_version["1.0.1"] == 3
+    assert by_version["1.0.9"] == 6
