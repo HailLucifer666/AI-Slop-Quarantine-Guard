@@ -222,3 +222,91 @@ async def test_registry_unknown_is_high_advisory():
     assert len(findings) == 1
     assert findings[0].confidence is Confidence.HIGH
     assert findings[0].block_eligible is False
+
+
+# --- workspace/fixture downgrades (scan #20 finding 1) ----------------------
+
+# Probes (2026-11-12, run and restored): disabling the diff-manifest name union
+# in dependencies.py reded exactly
+# test_manifest_declared_name_downgraded_from_diff_manifests; removing the
+# fixture-path rung reded test_fixture_path_manifest_downgraded; the plain-404
+# negative control stayed green throughout — the downgrades never switch
+# SQG001's block off.
+
+_PKG_DIFF = """\
+--- a/app/package.json
++++ b/app/package.json
+@@ -1,1 +1,1 @@
+-{}
++{"name": "app", "dependencies": {"helper": "1.0.0"}}
+"""
+
+
+@pytest.mark.asyncio
+async def test_workspace_declared_name_downgraded():
+    # A public-registry 404 for a name THIS repo declares is a workspace-internal
+    # package, not a hallucination (scan-mode set arrives via repo_context).
+    files = {"app/package.json": '{"name": "app", "dependencies": {"helper": "1.0.0"}}'}
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    ctx["workspace_names"] = {"helper"}
+    findings = await check_dependencies(_PKG_DIFF, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+    assert "declared by this repo" in f.message
+
+
+@pytest.mark.asyncio
+async def test_manifest_declared_name_downgraded_from_diff_manifests():
+    # PR mode has no workspace set — the detector derives it from the manifests the
+    # diff itself touches (a new workspace package added in the same PR).
+    files = {
+        "packages/helper/package.json": '{"name": "helper"}',
+        "app/package.json": '{"dependencies": {"helper": "1.0.0"}}',
+    }
+    diff = (
+        _PKG_DIFF
+        + "--- a/packages/helper/package.json\n"
+        + "+++ b/packages/helper/package.json\n"
+        + "@@ -0,0 +1,1 @@\n"
+        + '+{"name": "helper"}\n'
+    )
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_fixture_path_manifest_downgraded():
+    # scan #20 finding 1: a fixture manifest under evals/.../fixtures/ carries a
+    # fake package on purpose — surfaced as advisory, never blocked.
+    fixture_diff = _PKG_DIFF.replace("app/", "evals/triage-finding/fixtures/repo/")
+    files = {"evals/triage-finding/fixtures/repo/package.json": '{"dependencies": {"helper": "1.0.0"}}'}
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(fixture_diff, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.HIGH
+    assert f.block_eligible is False
+    assert "test/fixture path" in f.message
+
+
+@pytest.mark.asyncio
+async def test_plain_404_still_blocks_with_no_downgrade_signals():
+    # Negative control: without a workspace declaration or fixture path, a clean 404
+    # is still CERTAIN and block-eligible — the downgrades must not switch SQG001 off.
+    files = {"app/package.json": '{"dependencies": {"helper": "1.0.0"}}'}
+    ctx = _ctx(files, {"helper": Existence.MISSING})
+    findings = await check_dependencies(_PKG_DIFF, ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.confidence is Confidence.CERTAIN
+    assert f.block_eligible is True

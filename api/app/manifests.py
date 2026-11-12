@@ -159,6 +159,51 @@ def npmrc_private_scopes(content: str) -> set[str]:
     return {m.group(1) for m in _NPMRC_SCOPE_RE.finditer(content)}
 
 
+def collect_workspace_names(files: Dict[str, str]) -> set[str]:
+    """Names this repository itself declares as packages.
+
+    Why this exists: a public-registry 404 for a name the repo declares is a
+    workspace-internal package (npm workspaces / monorepo tooling), not a
+    hallucinated dependency — SQG001 must never block on it (derived from the
+    manifests' own ``name`` fields, never a hand-kept list; scan #20's
+    ``evals/triage-finding`` fixture is the incident that motivated the
+    fixture-path half, this is the workspace half).
+
+    ``workspaces``/``packages`` globs are deliberately NOT parsed: a glob can
+    only point at directories that themselves carry a manifest, and those
+    manifests' names are already collected here — parsing globs would add
+    nothing to the name set.
+
+    Malformed files are skipped: collection is best-effort and one broken
+    manifest must not void the set (the registry check answers per-name anyway).
+    Whole-repo scans pass the full ingested tree; PR mode passes only the
+    manifests the diff touches, so an un-touched workspace package keeps its
+    CERTAIN finding (fail-safe: absent evidence never downgrades).
+    """
+    names: set[str] = set()
+    for path, content in files.items():
+        base = path.replace("\\", "/").rsplit("/", 1)[-1]
+        if base == "package.json":
+            try:
+                data = json.loads(content)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                name = data.get("name")
+                if isinstance(name, str) and name.strip():
+                    names.add(name)
+        elif base == "pyproject.toml":
+            try:
+                data = tomllib.loads(content)
+            except tomllib.TOMLDecodeError:
+                continue
+            project = data.get("project") if isinstance(data, dict) else None
+            name = project.get("name") if isinstance(project, dict) else None
+            if isinstance(name, str) and name.strip():
+                names.add(name)
+    return names
+
+
 def extract_dependency_names(filename: str, content: str) -> List[str]:
     """Dispatch to the right parser by filename; return registry-checkable names."""
     base = filename.rsplit("/", 1)[-1]

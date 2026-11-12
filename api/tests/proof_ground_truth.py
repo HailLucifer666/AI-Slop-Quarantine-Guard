@@ -187,6 +187,15 @@ EXPECTATIONS: List[Expectation] = [
         must_not_find=ALL_RULES,
     ),
     Expectation(
+        fixture="synthetic-token",
+        why="A distinctive token whose own value carries a fake-marker word is fixture "
+            "material — surfaced as an advisory, never CERTAIN/block-eligible (scan #20 "
+            "blocked on a literal github_pat_SYNTHETIC_... token).",
+        must_find={"SQG002": 1},
+        min_confidence={"SQG002": "HIGH"},
+        must_not_find=frozenset({"SQG001", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007"}),
+    ),
+    Expectation(
         fixture="clean-dependencies",
         why="Two real, exactly-pinned, permissively-licensed packages with no "
             "advisories at those versions.",
