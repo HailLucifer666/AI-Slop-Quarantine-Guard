@@ -51,6 +51,11 @@ jobs:
         run: pipx install strix-agent==1.0.4
 
       - name: Run Strix (non-interactive)
+        # Job-level continue-on-error does NOT flip the job's check-run
+        # conclusion (PR #36's checks still showed strix-scan red), so the
+        # advisory-only steps carry their own: an external LLM agent failing must
+        # annotate, never redden the PR.
+        continue-on-error: true
         env:
           STRIX_LLM: ${{ vars.STRIX_LLM || 'openai/minimaxai/minimax-m3' }}
           LLM_API_BASE: ${{ vars.LLM_API_BASE || 'https://integrate.api.nvidia.com/v1' }}
@@ -72,6 +77,9 @@ jobs:
       # uploaded artifact instead of fabricating a findings summary in-line.
       - name: Comment with a link to the findings artifact
         if: always() && github.event_name == 'pull_request'
+        # The comment POST failed on PR #36 (token permissions) — a missing
+        # advisory comment must never redden the check (same rule as the run step).
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
