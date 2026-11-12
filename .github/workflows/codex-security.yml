@@ -16,11 +16,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  codex-security-scan:
+  # Same secret-presence guard as strix.yml: `secrets` is not available in
+  # job-level `if:`, and a workflow that used it there failed to parse on every
+  # push (0s startup failures — the red CI on merged commits, 2026-11-13).
+  key-guard:
     runs-on: ubuntu-latest
-    # Skip cleanly instead of running a command guaranteed to fail on missing
-    # credentials (same pattern as strix.yml's fork-PR guard).
-    if: ${{ secrets.CODEX_SECURITY_API_KEY != '' }}
+    outputs:
+      has_key: ${{ steps.key.outputs.has_key }}
+    steps:
+      - id: key
+        env:
+          CODEX_SECURITY_API_KEY: ${{ secrets.CODEX_SECURITY_API_KEY }}
+        run: echo "has_key=$([ -n "$CODEX_SECURITY_API_KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  codex-security-scan:
+    needs: key-guard
+    if: needs.key-guard.outputs.has_key == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 

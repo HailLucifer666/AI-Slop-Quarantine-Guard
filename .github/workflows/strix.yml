@@ -17,12 +17,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The `secrets` context is NOT available in job-level `if:` expressions — a
+  # workflow that used it there failed to parse on every trigger (0s startup
+  # failures since the file was added). The canonical pattern: a guard job reads
+  # the secret in a step env and publishes the verdict as an output, and the scan
+  # job gates on `needs`. (Review 2026-11-13: these 0s failures were the red CI
+  # on merged commits — the files had never run successfully before.)
+  key-guard:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.key.outputs.has_key }}
+    steps:
+      - id: key
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: echo "has_key=$([ -n "$LLM_API_KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   strix-scan:
+    needs: key-guard
+    if: needs.key-guard.outputs.has_key == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
-    # Fork PRs don't have repo secrets — skip cleanly instead of running a
-    # command guaranteed to fail on missing credentials.
-    if: ${{ github.event_name == 'workflow_dispatch' || secrets.LLM_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
