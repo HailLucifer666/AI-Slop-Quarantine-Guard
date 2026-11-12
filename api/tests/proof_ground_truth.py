@@ -231,6 +231,8 @@ EXPECTATIONS: List[Expectation] = [
         must_find={"SQG001": 1, "SQG007": 1},
         min_confidence={"SQG001": "CERTAIN", "SQG007": "HIGH"},
         must_not_find=frozenset({"SQG003", "SQG004", "SQG005", "SQG006"}),
+    ),
+    Expectation(
         fixture="synthetic-token",
         why="A distinctive token whose own value carries a fake-marker word is fixture "
             "material — surfaced as an advisory, never CERTAIN/block-eligible (scan #20 "
