@@ -271,22 +271,48 @@ def _severity_of(vulns: list) -> Optional[str]:
     return best.lower() if best else None
 
 
+def _first_vector(vuln: dict) -> Optional[str]:
+    """The first CVSS vector in one advisory's structured ``severity[]`` array, or
+    None (numeric scores, non-CVSS types, and score strings without the CVSS
+    prefix are not vectors and are skipped)."""
+    for entry in vuln.get("severity") or []:
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry.get("type"), str)
+            and entry["type"].upper().startswith("CVSS")
+            and isinstance(entry.get("score"), str)
+            and entry["score"].upper().startswith("CVSS:")
+        ):
+            return entry["score"]
+    return None
+
+
 def _cvss_vector_of(vulns: list) -> Optional[str]:
-    """The first CVSS vector OSV carries in its structured ``severity[]`` array, or
-    None. This is stored verbatim and never turned into a score or a label — the
-    vector is the fact; computing a score from it would be our own judgement
-    layered on top, and a vector must never masquerade as the advisory's severity
-    label (that lives in database_specific.severity when the source publishes one)."""
+    """The CVSS vector that belongs with this finding's severity label, or None.
+
+    Stored verbatim and never turned into a score or a label — the vector is the
+    fact; computing a score from it would be our own judgement layered on top.
+    When ``_severity_of`` picked a winning advisory, the vector comes from THAT
+    advisory, so the two rendered fields describe the same source (review finding,
+    2026-11-13: first-vector-wins could pair one advisory's vector with another's
+    label); first-match across advisories only when no label exists anywhere.
+    """
+    ranking = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2, "MEDIUM": 2, "LOW": 3}
+    best_rank, best_vuln = None, None
     for vuln in vulns:
-        for entry in vuln.get("severity") or []:
-            if (
-                isinstance(entry, dict)
-                and isinstance(entry.get("type"), str)
-                and entry["type"].upper().startswith("CVSS")
-                and isinstance(entry.get("score"), str)
-                and entry["score"].upper().startswith("CVSS:")
-            ):
-                return entry["score"]
+        label = (vuln.get("database_specific") or {}).get("severity")
+        if isinstance(label, str) and label.upper() in ranking:
+            rank = ranking[label.upper()]
+            if best_rank is None or rank < best_rank:
+                best_rank, best_vuln = rank, vuln
+    if best_vuln is not None:
+        vector = _first_vector(best_vuln)
+        if vector is not None:
+            return vector
+    for vuln in vulns:
+        vector = _first_vector(vuln)
+        if vector is not None:
+            return vector
     return None
 
 

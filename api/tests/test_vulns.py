@@ -410,3 +410,45 @@ async def test_no_severity_data_stays_null():
     assert len(findings) == 1
     assert findings[0].severity is None
     assert findings[0].cvss_vector is None
+
+
+@pytest.mark.asyncio
+async def test_vector_pairs_with_the_advisory_whose_label_won():
+    # Review probe (2026-11-13): first-vector-wins paired one advisory's vector
+    # with another's severity label. The vector must come from the advisory whose
+    # label won, so the two rendered fields describe the same source.
+    vulns = [
+        {
+            "id": "GHSA-low-first",
+            "database_specific": {"severity": "LOW"},
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"}],
+        },
+        {
+            "id": "GHSA-critical-second",
+            "database_specific": {"severity": "CRITICAL"},
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}],
+        },
+    ]
+    diff = _diff("requirements.txt", ["requests==2.19.0"])
+    ctx, kw = _ctx({"requirements.txt": "requests==2.19.0\n"}, vulns=vulns)
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "critical"
+    assert f.cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+
+
+@pytest.mark.asyncio
+async def test_vector_acceptance_matrix():
+    # Gate C on _first_vector: CVSS_V4 accepted, numeric scores skipped, non-CVSS
+    # types skipped, score strings without the CVSS: prefix skipped.
+    from app.analyzers.vulns import _first_vector
+    cases = [
+        ({"severity": [{"type": "CVSS_V4", "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N"}]}, "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N"),
+        ({"severity": [{"type": "CVSS_V3", "score": 7.5}]}, None),  # numeric score, not a vector string
+        ({"severity": [{"type": "OTHER", "score": "CVSS:3.1/AV:N/AC:L"}]}, None),  # non-CVSS type
+        ({"severity": [{"type": "CVSS_V3", "score": "7.5"}]}, None),  # no CVSS: prefix
+        ({"severity": "CVSS:3.1/AV:N"}, None),  # whole array not a list of dicts
+    ]
+    for vuln, expected in cases:
+        assert _first_vector(vuln) == expected, vuln
