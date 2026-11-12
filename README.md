@@ -139,6 +139,10 @@ Frontend `web/.env.local` (see `web/.env.example`): `NEXT_PUBLIC_API_URL`, and o
 cd api && python -m pytest -q
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — the review gate every change runs: a test that fails on the parent commit, the proof scripts, and the firewall that keeps LLM output out of the deterministic Guard.
+
 ## Status
 
 Deterministic engine (SQG001–SQG007), whole-repo scanner (URL / zip / local folder), and the
