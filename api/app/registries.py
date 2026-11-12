@@ -8,7 +8,7 @@ Never block on UNKNOWN: a registry outage must not fail a PR.
 
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -72,15 +72,21 @@ async def check_exists(
 
 
 def _parse_iso(value) -> Optional[datetime]:
-    """Parse an ISO-8601 registry timestamp, or None. Registries disagree on format
-    (PyPI drops the offset, npm suffixes Z, crates carries a numeric offset); fromisoformat
-    plus a Z→+00:00 swap covers all three without a dateutil dependency."""
+    """Parse an ISO-8601 registry timestamp as UTC-aware, or None. Registries
+    disagree on format: PyPI's upload_time carries NO offset (naive — normalized to
+    UTC here, because a naive datetime reaching an aware subtraction raises
+    TypeError and kills the whole analyzer; probed 2026-11-13), npm suffixes Z,
+    crates carries a numeric offset. fromisoformat plus a Z→+00:00 swap covers all
+    three without a dateutil dependency."""
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 async def registry_created_at(

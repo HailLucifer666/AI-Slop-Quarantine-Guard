@@ -186,6 +186,12 @@ async def check_typosquat(diff: str, repo_context: dict) -> List[Finding]:
                 if created_fn is not None:
                     first_release = await created_fn(ecosystem, name, client)
                     if first_release is not None:
+                        if first_release.tzinfo is None:
+                            # A naive datetime (PyPI's upload_time shape, or an injected
+                            # caller) must be normalized HERE — the subtraction site —
+                            # because aware-minus-naive raises TypeError and would kill
+                            # the whole analyzer (probed 2026-11-13).
+                            first_release = first_release.replace(tzinfo=timezone.utc)
                         age_days = (datetime.now(timezone.utc) - first_release).days
                         if age_days >= _ESTABLISHED_AGE_DAYS:
                             # An established, still-published package whose name merely

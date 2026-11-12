@@ -183,3 +183,19 @@ async def test_age_gate_off_without_created_fn():
     diff = _diff("requirements.txt", ["bleak==0.22.0"])
     findings = await check_typosquat(diff, _ctx({"requirements.txt": "bleak==0.22.0\n"}))
     assert len(findings) == 1  # still flagged without age data — advisory, never a block
+
+
+@pytest.mark.asyncio
+async def test_naive_registry_timestamp_does_not_crash_the_gate():
+    # PyPI upload_time carries no UTC offset, so fromisoformat yields a NAIVE
+    # datetime; subtracting it from an aware now() raises TypeError and would
+    # kill the whole analyzer (the corpus fixture passed vacuously through the
+    # per-analyzer error catch before this was fixed — probed 2026-11-13).
+    # The parser must normalize offset-less timestamps to UTC.
+    async def pypi_shape(ecosystem, name, client):
+        return datetime(2018, 4, 27, 9, 43, 2)  # naive, exactly as PyPI serves it
+
+    diff = _diff("requirements.txt", ["bleak==0.22.0"])
+    ctx = _ctx({"requirements.txt": "bleak==0.22.0\n"})
+    ctx["created_fn"] = pypi_shape
+    assert await check_typosquat(diff, ctx) == []
