@@ -12,6 +12,7 @@ from typing import Optional
 
 from sqlalchemy import func, or_, select
 
+from app.analyzers.base import RULE_VERSION
 from app.db.models import AppSettings, AuditLog, Scan, WorkerHeartbeat
 from app.db.session import async_session
 
@@ -21,8 +22,10 @@ from app.db.session import async_session
 RULE_IDS = {"SQG001", "SQG002", "SQG003", "SQG004", "SQG005", "SQG006", "SQG007", "SQG009"}
 RETENTION_CHOICES = {30, 90, 365}
 # Stamped onto every completed scan so a stored result records which revision of the
-# rule set produced it — bump alongside analyzers.base.RULE_VERSION.
-SQG_RULES_VERSION = "1.0"
+# rule set produced it. Imported from analyzers.base so the two can never drift — the
+# hand-copied literal here stopped half-way once (RULE_VERSION went 1.1 while this kept
+# stamping 1.0), caught in the 2026-11-12 audit and locked by test_stored_scan_rule_version_matches_engine.
+SQG_RULES_VERSION = RULE_VERSION
 _DEFAULT_BLOCKED = ["SQG001", "SQG002"]  # fake-dep + secret: the safest block defaults
 
 # How stale a running scan's heartbeat may get before we declare its worker dead.

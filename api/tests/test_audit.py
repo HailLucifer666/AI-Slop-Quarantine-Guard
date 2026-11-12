@@ -69,3 +69,17 @@ async def test_audit_requires_api_key_when_configured(env, monkeypatch):
     assert (await env.get("/api/audit")).status_code == 401
     resp = await env.get("/api/audit", headers={"X-API-Key": "s3cr3t"})
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stored_scan_rule_version_matches_engine(env):
+    """Two routes, one answer (kee audit 2026-11-12): the rule revision a stored scan
+    claims about itself must be THE engine's RULE_VERSION — a hand-copied literal in
+    store.py drifted to 1.0 while the engine bumped to 1.1, so one scan row asserted
+    two different revisions. The stamp is imported, and this test keeps them locked."""
+    from app.analyzers.base import RULE_VERSION
+
+    sid = await store.create_scan("local", "/tmp/x")
+    await store.complete_scan(sid, COMPLETE)
+    row = await store.get_scan(sid)
+    assert row["engine_versions"]["rules_version"] == RULE_VERSION
