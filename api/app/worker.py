@@ -31,7 +31,6 @@ from app.checks import (
     build_annotations,
     build_review_comments,
     dedupe_findings,
-    determine_conclusion,
     format_check_run_summary,
     would_block_findings,
 )

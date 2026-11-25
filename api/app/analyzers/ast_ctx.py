@@ -18,14 +18,15 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
+_ts_get_parser: Any = None
 try:
-    from tree_sitter_language_pack import get_parser as _ts_get_parser
+    from tree_sitter_language_pack import get_parser as _imported_get_parser
 
+    _ts_get_parser = _imported_get_parser
     HAS_TREE_SITTER = True
 except Exception:  # noqa: BLE001 — optional/degraded fallback if native wheel missing
-    _ts_get_parser = None
     HAS_TREE_SITTER = False
 
 _THREAD_LOCAL = threading.local()
