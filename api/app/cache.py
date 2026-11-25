@@ -37,7 +37,10 @@ _TTL_SECONDS = 3600
 
 async def _get(key: str) -> Optional[str]:
     try:
-        return await get_redis().get(key)
+        val = await get_redis().get(key)
+        if isinstance(val, bytes):
+            return val.decode("utf-8", errors="replace")
+        return val if isinstance(val, str) else None
     except Exception:  # noqa: BLE001 — Redis down → cache miss, never fatal
         return None
 

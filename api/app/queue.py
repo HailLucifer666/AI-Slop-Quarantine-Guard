@@ -10,16 +10,14 @@ RedisUnavailable contract in worker.py).
 import asyncio
 import collections.abc
 import json
-from typing import Awaitable, TypeVar
+from typing import Any
 
 import redis.asyncio as aioredis
 
 from app.config import settings
 
-_T = TypeVar("_T")
 
-
-async def _await_result(value: Awaitable[_T] | _T) -> _T:
+async def _await_result(value: Any) -> Any:
     """Await a redis command result whose stubs union ``Awaitable[T] | T``.
 
     redis's shared sync/async mixin types list commands (lpush, rpoplpush,
@@ -143,7 +141,10 @@ QUEUE_PAIRS = (
 async def reserve_job(source_key: str, processing_key: str) -> str | None:
     """Atomically move one job (if any) from `source_key` to `processing_key`,
     returning its raw JSON, or None if the source is empty right now."""
-    return await _await_result(get_redis().rpoplpush(source_key, processing_key))
+    raw = await _await_result(get_redis().rpoplpush(source_key, processing_key))
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw if isinstance(raw, str) else None
 
 
 async def ack_job(processing_key: str, raw: str) -> None:
