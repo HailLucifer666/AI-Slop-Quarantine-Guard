@@ -20,7 +20,7 @@ import re
 # test token when a delimiter or the segment edge says so.
 _TEST_TOKEN = re.compile(
     r"(?:^|[/_.-])(?:tests?|testing|testdata|__tests__|__snapshots__|cypress|fixtures?|"
-    r"mocks?|__mocks__|specs?|e2e|evals?|examples?|samples?)(?:$|[/_.-])",
+    r"mocks?|__mocks__|specs?|e2e|evals?|examples?|samples?|harness)(?:$|[/_.-])",
     re.IGNORECASE,
 )
 

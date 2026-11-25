@@ -250,7 +250,10 @@ def extract_dependency_names(filename: str, content: str) -> List[str]:
 LOCKFILE_ECOSYSTEM: Dict[str, str] = {
     "package-lock.json": "npm",
     "yarn.lock": "npm",
+    "pnpm-lock.yaml": "npm",
+    "bun.lock": "npm",
     "poetry.lock": "pypi",
+    "uv.lock": "pypi",
     "Cargo.lock": "crates",
     "go.sum": "go",
     "Gemfile.lock": "rubygems",
@@ -360,6 +363,70 @@ def parse_go_sum(content: str) -> List[Tuple[str, str]]:
     return pins
 
 
+def parse_pnpm_lock_yaml(content: str) -> List[Tuple[str, str]]:
+    """Extract pinned (name, version) pairs from pnpm-lock.yaml (v6 and v9 formats).
+
+    Parses the top-level ``packages:`` section without requiring PyYAML. Keys look like:
+      - v9: ``  lodash@4.17.23:`` or ``  '@babel/core@7.24.0':``
+      - v6: ``  /lodash@4.17.23:`` or ``  /@babel/core@7.24.0(peer@1.0.0):``
+    """
+    pins: List[Tuple[str, str]] = []
+    seen: set[Tuple[str, str]] = set()
+    in_packages = False
+    for raw in content.splitlines():
+        if not raw or raw.startswith("#"):
+            continue
+        if not raw[0].isspace():
+            in_packages = raw.strip() == "packages:"
+            continue
+        if not in_packages:
+            continue
+        # Package keys sit at indent level 2 (two spaces) and end with ':'
+        if raw.startswith("  ") and not raw.startswith("   ") and raw.rstrip().endswith(":"):
+            key = raw.strip()[:-1].strip().strip("'\"")
+            if key.startswith("/"):
+                key = key[1:]
+            # Strip peer-dependency qualifier suffix `(peer@...)` or `_peer@...`
+            if "(" in key:
+                key = key.split("(", 1)[0]
+            at = key.rfind("@")
+            if at <= 0:
+                continue
+            name, version = key[:at], key[at + 1 :]
+            if name and version and (name, version) not in seen:
+                seen.add((name, version))
+                pins.append((name, version))
+    return pins
+
+
+def _strip_jsonc_trailing_commas(text: str) -> str:
+    """Remove trailing commas before ``}`` or ``]`` in JSONC (used by ``bun.lock``)."""
+    return re.sub(r",(\s*[}\]])", r"\1", text)
+
+
+def parse_bun_lock(content: str) -> List[Tuple[str, str]]:
+    """Extract pinned (name, version) pairs from Bun's text ``bun.lock`` (JSONC)."""
+    cleaned = _strip_jsonc_trailing_commas(content)
+    data = json.loads(cleaned)
+    packages = data.get("packages")
+    if not isinstance(packages, dict):
+        return []
+    pins: List[Tuple[str, str]] = []
+    seen: set[Tuple[str, str]] = set()
+    for _key, entry in packages.items():
+        if not isinstance(entry, list) or not entry or not isinstance(entry[0], str):
+            continue
+        spec = entry[0]  # e.g. "lodash@4.17.23" or "@babel/core@7.24.0"
+        at = spec.rfind("@")
+        if at <= 0:
+            continue
+        name, version = spec[:at], spec[at + 1 :]
+        if name and version and (name, version) not in seen:
+            seen.add((name, version))
+            pins.append((name, version))
+    return pins
+
+
 def extract_pinned_lockfile(filename: str, content: str) -> List[Tuple[str, str]]:
     """Dispatch to the right lockfile parser; return pinned (name, version) pairs.
 
@@ -368,12 +435,16 @@ def extract_pinned_lockfile(filename: str, content: str) -> List[Tuple[str, str]
     """
     base = filename.rsplit("/", 1)[-1]
     try:
-        if base in ("poetry.lock", "Cargo.lock"):
+        if base in ("poetry.lock", "Cargo.lock", "uv.lock"):
             return _parse_toml_packages(content)
         if base == "package-lock.json":
             return parse_package_lock_json(content)
         if base == "yarn.lock":
             return parse_yarn_lock(content)
+        if base == "pnpm-lock.yaml":
+            return parse_pnpm_lock_yaml(content)
+        if base == "bun.lock":
+            return parse_bun_lock(content)
         if base == "go.sum":
             return parse_go_sum(content)
         if base in _EXTRA_LOCKFILE_PARSERS:

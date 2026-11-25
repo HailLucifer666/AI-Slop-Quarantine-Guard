@@ -43,11 +43,14 @@ from app.coverage import (
     NOT_RUN_UNSUPPORTED,
     TIMED_OUT,
     RuleCoverage,
+    note_missing_engines,
     plan_rule,
     summarize,
     take_census,
 )
 from app.diff import parse_diff
+from app.engines import probe_all_cached, rules_missing_an_engine
+from app.gate import CONCLUSION, UNVERIFIED_DIFF_SUMMARY, GateInput, Verdict, conclusion_for
 from app.github_auth import get_installation_token
 from app.github_client import (
     MAX_REVIEW_COMMENTS,
@@ -190,10 +193,13 @@ async def _run_pr_analysis(
         logger.warning("no diff available for %s#%s", repo, pr_number)
         if check_run_id is not None:
             await update_check_run(
-                repo, check_run_id, "success",
-                "✅ Nothing to analyze in this change.", token,
+                repo, check_run_id, CONCLUSION[Verdict.UNVERIFIED],
+                UNVERIFIED_DIFF_SUMMARY, token,
             )
-        return {"repo": repo, "pr_number": pr_number, "files": {}, "added_lines": 0}
+        return {
+            "repo": repo, "pr_number": pr_number, "files": {}, "added_lines": 0,
+            "conclusion": CONCLUSION[Verdict.UNVERIFIED],
+        }
 
     added = parse_diff(diff_text)
     files: dict[str, int] = {}
@@ -206,6 +212,7 @@ async def _run_pr_analysis(
         "repo": repo, "head_sha": head_sha, "token": token,
         "check_exists": cached_existence,
         "created_fn": cached_registry_created,
+        "mode": "pr",
     }
     disabled = settings.disabled_analyzer_ids
     # (rule id, thunk) — the kill-switch drops any disabled analyzer.
@@ -265,6 +272,8 @@ async def _run_pr_analysis(
         final_by_rule[f.rule_id] = final_by_rule.get(f.rule_id, 0) + 1
     for c in coverages:
         c.findings = final_by_rule.get(c.rule_id, 0)
+    engine_status = await asyncio.to_thread(probe_all_cached)
+    note_missing_engines(coverages, rules_missing_an_engine(engine_status))
     coverage_summary = summarize(coverages)
 
     logger.info(
@@ -276,7 +285,11 @@ async def _run_pr_analysis(
     for f in findings:
         logger.info("  [%s/%s] %s:%d %s", f.rule_id, f.confidence.value, f.file_path, f.line_start, f.message)
 
-    conclusion = determine_conclusion(findings)
+    # Honest verdict: label-only today (block_mode=False), but errored/timed-out
+    # checks with zero findings degrade to neutral (UNVERIFIED) rather than green.
+    conclusion = conclusion_for(GateInput(
+        findings=findings, diff_available=True, coverage=coverage_summary, block_mode=False,
+    ))
 
     # Shadow gate (Phase 9 precursor): record what real blocking WOULD do, but never
     # actually block — the gate stays label-only until the <1% FP bar is met.

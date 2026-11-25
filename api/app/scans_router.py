@@ -117,9 +117,17 @@ async def _start_zip_scan(request: Request) -> dict:
     upload = form.get("file")
     if upload is None or not hasattr(upload, "read"):
         raise HTTPException(status_code=400, detail="multipart upload requires a 'file' field")
-    data = await upload.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="uploaded file too large")
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while True:
+        chunk = await upload.read(65536)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="uploaded file too large")
+        chunks.append(chunk)
+    data = b"".join(chunks)
     if not data:
         raise HTTPException(status_code=400, detail="uploaded file is empty")
 

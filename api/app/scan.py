@@ -39,10 +39,10 @@ from app.coverage import (
     summarize,
     take_census,
 )
-from app.engines import probe_all, rules_missing_an_engine
+from app.engines import probe_all_cached, rules_missing_an_engine
+from app.gate import GateInput, decide
 from app.grouping import group_findings, summarize_groups
 from app.manifests import collect_workspace_names
-from app.synthetic_diff import build_synthetic_diff
 
 logger = logging.getLogger("scan")
 
@@ -229,7 +229,16 @@ async def run_scan(
     overrides = overrides or {}
     started = time.monotonic()
 
-    diff = build_synthetic_diff(files)
+    # Pre-parse added lines directly from the file map ONCE instead of building a
+    # 50 MB synthetic unified diff string and re-parsing it 8 separate times.
+    # An empty diff string is passed alongside `added_by_file` so every analyzer
+    # uses the pre-parsed structure directly (and still honors `parse_diff(diff)`
+    # when invoked standalone on a PR diff).
+    added_by_file = {
+        path: list(enumerate(content.splitlines(), 1))
+        for path, content in files.items()
+    }
+    diff = ""
     # Cached registry/OSV/license lookups so a big repo doesn't re-hit the network
     # for the same package (fail-open — see app.cache).
     check_exists = overrides.get("check_exists", cached_existence)
@@ -244,6 +253,11 @@ async def run_scan(
         # Names this repo itself declares (workspace-internal packages) — SQG001
         # downgrades a public-registry 404 for one of these instead of blocking.
         "workspace_names": collect_workspace_names(files),
+        # Whole-repo fast path + shared Tree-sitter AST cache + mode tag.
+        "files": files,
+        "added_by_file": added_by_file,
+        "ast_cache": {},
+        "mode": "repo",
     }
     fetch4 = _local_fetch_four(files)
 
@@ -269,35 +283,38 @@ async def run_scan(
 
     findings: List[Finding] = []
     coverages: List[RuleCoverage] = []
-    for idx, (phase, rule_id, run) in enumerate(analyzers):
-        if on_progress:
-            await on_progress({
-                "phase": phase, "index": idx, "total": total,
-                "findings_so_far": len(findings), "files_total": files_total,
-            })
 
-        # An operator-disabled rule is reported as disabled, never as a pass.
+    # Prepare per-rule execution plan in stable order, then run all active analyzers
+    # concurrently via asyncio.gather so I/O-bound (registry/OSV) and CPU-bound
+    # (off-loop thread) checks overlap instead of waiting serially.
+    completed_count = 0
+    progress_lock = asyncio.Lock()
+
+    async def _execute_one(idx: int, phase: str, rule_id: str, run: Callable):
+        nonlocal completed_count
+        if on_progress:
+            async with progress_lock:
+                await on_progress({
+                    "phase": phase, "index": idx, "total": total,
+                    "findings_so_far": len(findings), "files_total": files_total,
+                })
+
         if rule_id in disabled:
-            coverages.append(RuleCoverage(
+            return [], RuleCoverage(
                 rule_id, CAPABILITIES[rule_id].title if rule_id in CAPABILITIES else rule_id,
                 NOT_RUN_DISABLED, detail="switched off by DISABLED_ANALYZERS",
-            ))
-            continue
+            )
 
         coverage = plan_rule(rule_id, census)
         if not coverage.covered and coverage.status == NOT_RUN_UNSUPPORTED:
-            # Nothing this rule can read — don't spend the budget, and say why.
-            coverages.append(coverage)
-            continue
+            return [], coverage
 
         rule_started = time.monotonic()
+        produced: List[Finding] = []
         try:
             produced = await _run_analyzer(rule_id, run, ANALYZER_BUDGET)
-            findings += produced
             coverage.findings = len(produced)
         except asyncio.TimeoutError:
-            # Never let one slow analyzer hang the scan — but a skipped analyzer is a
-            # gap in the result, not a clean pass, so it is recorded as such.
             coverage.status = TIMED_OUT
             coverage.detail = f"exceeded its {ANALYZER_BUDGET:.0f}s budget and was stopped"
             logger.warning("analyzer %s (%s) exceeded %ss budget — skipped", phase, rule_id, ANALYZER_BUDGET)
@@ -306,6 +323,15 @@ async def run_scan(
             coverage.detail = f"failed with an internal error: {exc}"[:300]
             logger.exception("analyzer %s (%s) failed", phase, rule_id)
         coverage.duration_ms = int((time.monotonic() - rule_started) * 1000)
+        completed_count += 1
+        return produced, coverage
+
+    # Run concurrently while preserving deterministic analyzer ordering in results.
+    results_per_rule = await asyncio.gather(
+        *(_execute_one(idx, phase, rule_id, run) for idx, (phase, rule_id, run) in enumerate(analyzers))
+    )
+    for produced, coverage in results_per_rule:
+        findings += produced
         coverages.append(coverage)
 
     if on_progress:
@@ -328,16 +354,27 @@ async def run_scan(
         c.findings = final_by_rule.get(c.rule_id, 0)
 
     # Say which advertised engine was absent, so no rule's result is attributed to a
-    # scanner that never ran here.
-    engine_status = probe_all()
-    note_missing_engines(coverages, rules_missing_an_engine())
+    # scanner that never ran here. Probe once off the event loop (TTL-cached in prod).
+    engine_status = await asyncio.to_thread(probe_all_cached)
+    note_missing_engines(coverages, rules_missing_an_engine(engine_status))
 
     # Files nobody read cannot coexist with a clean verdict — see summarize.
     coverage_summary = summarize(coverages, unexamined_count=len(skipped) + len(suppressed))
+    verdict = decide(
+        GateInput(
+            findings=findings,
+            diff_available=True,
+            coverage=coverage_summary,
+            block_mode=False,
+        )
+    )
+    analytics = aggregate(findings, len(files), skipped, coverage_summary, suppressed)
+    analytics["verdict"] = verdict.value
     duration_ms = int((time.monotonic() - started) * 1000)
     return {
+        "verdict": verdict.value,
         "findings": [finding_to_dict(f) for f in findings],
-        "analytics": aggregate(findings, len(files), skipped, coverage_summary, suppressed),
+        "analytics": analytics,
         "coverage": coverage_summary,
         # Clustered view, so 318 real TODOs cannot bury 3 real secrets. Every finding
         # still appears above; this is structure, not filtering.

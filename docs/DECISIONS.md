@@ -557,3 +557,23 @@ A derived legitimacy signal: the package's **first-release date from its own reg
 **Known limit (recorded):** an attacker can publish a look-alike and wait out the threshold. Acceptable because SQG007 is advisory-only and never blocks; the age signal is a precision tool against the dominant fresh-squat shape, not a security guarantee.
 
 **Wiring:** `scan.py` and `worker.py` inject `created_fn` (cached) into `repo_context`; direct callers without the key keep pre-gate behaviour. The corpus is the loud guard against wiring drift: `established-lookalike` (bleak must stay silent) and `fresh-lookalike` (`reqests` must stay flagged) run through the real `run_scan` with replayed registry facts verified live 2026-11-13 (bleak HTTP 200, reqests HTTP 404).
+
+
+---
+
+## ADR-026: Tree-sitter AST Migration & 4-Factor Secret Precision Classifier
+
+**Date:** 2026-11-26  
+**Status:** ACCEPTED
+
+**Context:**  
+Real-world Scan #24 (`CodebuffAI/freebuff`, 2,557 files) produced 31 false positives out of 36 findings (86% FP rate). Root cause: single-line regexes over raw text cannot distinguish TypeScript interface signatures (`eval(`) or method definitions (`async eval(...) {`) from global `eval()` calls, cannot isolate comment nodes from code/strings, and cannot distinguish keychain service IDs (`com.codebuff.byok.v1`), dunder sentinels (`__...__`), or i18n error messages from real credentials.
+
+**Decision:**  
+1. Add `tree-sitter` + `tree-sitter-language-pack` (pure pip wheels, zero external binaries) via `api/app/analyzers/ast_ctx.py` (thread-safe per-thread parsers, per-scan `ast_cache`).
+2. Migrate `SQG006` (SAST) and `SQG003` (placeholders) to AST-backed matching when full source is available, with test-path filtering (`in_test_path`), ESM+CJS `child_process` tracking with `CWE-78`, and mode-aware (`pr` vs `repo`) attributed-TODO handling.
+3. Upgrade `SQG002` generic HIGH assignments with a unified `_CRED_WORD_SRC`, dunder/reverse-DNS/normalized-echo filters, non-secret identifier taxonomy, and a Shannon entropy floor (`2.7` bits/char), while scoping CERTAIN allowlists to the matched token value only.
+4. Wire `app/gate.py` (`Verdict`: `CLEAN`/`FLAGGED`/`BLOCKED`/`UNVERIFIED`) into both PR analysis (`worker.py`) and whole-repo scans (`scan.py`), run `scan.py` analyzers concurrently via `asyncio.gather` over pre-parsed `added_by_file`, and add exact-pin lockfile parsers for `pnpm-lock.yaml`, `bun.lock`, and `uv.lock`.
+
+**Consequence:**  
+Zero external binary installation required on Windows/Docker/CI; Scan #24 FP suite drops from 31/36 to 0 FPs while retaining 100% recall on the accuracy corpus and both real `execSync` findings.

@@ -75,7 +75,6 @@ _UNSUPPORTED_MANIFESTS: Dict[str, str] = {
     "Gemfile": "rubygems",
     "composer.json": "packagist",
     "pubspec.yaml": "pub", "mix.exs": "hex", "cabal.project": "hackage",
-    "pnpm-lock.yaml": "npm",
 }
 
 

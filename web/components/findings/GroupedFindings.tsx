@@ -126,14 +126,15 @@ export function GroupedFindings({
         // A discrete incident: render every occurrence as its own full card.
         return (
           <div key={group.key} className="space-y-3">
-            {group.occurrences.map((o) => {
+            {group.occurrences.map((o, idx) => {
               const finding = byFingerprint.get(o.fingerprint)
+              const occKey = `${o.fingerprint}:${o.file_path}:${o.line_start}:${idx}`
               return finding ? (
-                <FindingCard key={o.fingerprint} finding={finding} />
+                <FindingCard key={occKey} finding={finding} />
               ) : (
                 // Fingerprint mismatch (e.g. an older stored scan). Show the location we
                 // do have rather than dropping the finding from the view entirely.
-                <div key={o.fingerprint + o.line_start} className="wall-card p-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                <div key={occKey} className="wall-card p-4 text-sm" style={{ color: "var(--text-muted)" }}>
                   <span className="font-mono text-xs" style={{ color: "var(--accent-cyan)" }}>
                     {o.file_path}:{o.line_start}
                   </span>

@@ -54,13 +54,21 @@ def _client_ip(request: Request) -> str:
 
 
 async def rate_limit(request: Request) -> None:
-    """Allow at most ``settings.rate_limit_per_minute`` requests per client IP per
-    minute. <=0 disables; a Redis error fails open (request allowed)."""
-    limit = settings.rate_limit_per_minute
-    if limit <= 0:
+    """Per-IP per-minute rate limit, split into separate read (GET) and write buckets.
+
+    Read-only dashboard polling (GET /api/scans/{id}, /api/scans, /api/settings) gets 5x
+    the write allowance so live polling can never lock out the dashboard or starve scan
+    creation, while write endpoints (POST /api/scans, POST /api/crew/explain) stay capped
+    at ``settings.rate_limit_per_minute``. <=0 disables; Redis error fails open.
+    """
+    base_limit = settings.rate_limit_per_minute
+    if base_limit <= 0:
         return
+    is_read = request.method in ("GET", "HEAD", "OPTIONS")
+    bucket = "r" if is_read else "w"
+    limit = base_limit * 5 if (is_read and base_limit >= 10) else base_limit
     window = int(time.time() // 60)
-    key = f"sqg:rl:{_client_ip(request)}:{window}"
+    key = f"sqg:rl:{bucket}:{_client_ip(request)}:{window}"
     try:
         redis = get_redis()
         count = await redis.incr(key)

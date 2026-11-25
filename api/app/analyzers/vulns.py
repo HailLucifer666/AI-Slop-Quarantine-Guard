@@ -52,6 +52,7 @@ from .base import (
     Finding,
     Remediation,
 )
+from .paths import in_test_path
 
 logger = logging.getLogger("analyzers.vulns")
 
@@ -277,7 +278,7 @@ def _anchored_lock_line(
             elif current == name and stripped.startswith("version") and version in stripped:
                 return line_no
         return None
-    if filename in ("poetry.lock", "Cargo.lock"):
+    if filename in ("poetry.lock", "Cargo.lock", "uv.lock"):
         current = None
         for line_no, text in added:
             stripped = text.strip()
@@ -286,6 +287,19 @@ def _anchored_lock_line(
             elif stripped.startswith("name"):
                 current = stripped.split("=", 1)[-1].strip().strip('"').strip("'")
             elif current == name and stripped.startswith("version") and version in stripped:
+                return line_no
+        return None
+    if filename == "bun.lock":
+        # Exact bun.lock package tuple entry: `"pkg": ["pkg@1.2.3", ...]`
+        needle = f'["{name}@{version}"'
+        for line_no, text in added:
+            if needle in text:
+                return line_no
+        return None
+    if filename == "pnpm-lock.yaml":
+        needle = f"{name}@{version}"
+        for line_no, text in added:
+            if text.startswith("  ") and not text.startswith("   ") and needle in text:
                 return line_no
         return None
     return None
@@ -510,14 +524,18 @@ async def check_vulnerabilities(
     assert isinstance(head_sha, str)
     assert isinstance(token, str)
 
-    added_by_file: dict[str, List[Tuple[int, str]]] = {}
-    for path, line, content in parse_diff(diff):
-        added_by_file.setdefault(path, []).append((line, content))
+    added_by_file = repo_context.get("added_by_file")
+    if added_by_file is None:
+        added_by_file = {}
+        for path, line, content in parse_diff(diff):
+            added_by_file.setdefault(path, []).append((line, content))
 
     # Collect every (path, line, pin) occurrence introduced on an added line.
     occurrences: List[Tuple[str, int, Pin]] = []
     async with httpx.AsyncClient(timeout=10) as client:
         for path, added in added_by_file.items():
+            if in_test_path(path):
+                continue  # fixture manifests/lockfiles hold intentional vulnerable pins
             lock_eco = lockfile_ecosystem(path)
             is_lock = lock_eco in _OSV_ECOSYSTEM
             versioned_eco = versioned_manifest_ecosystem(path)
@@ -565,17 +583,35 @@ async def check_vulnerabilities(
         results = await query_batch(keys, client) if keys else {}
 
     queried = set(keys)
-    findings: List[Finding] = []
+    # Deduplicate by (ecosystem, name, version) across multiple manifests/lockfiles in the
+    # same scan: keep the first occurrence and append ` (also in N other manifest/lockfile(s))`
+    # so duplicate lockfile copies never inflate counts while preserving full transparency.
+    by_pin: Dict[Pin, List[Tuple[str, int]]] = {}
+    pin_order: List[Pin] = []
     for path, line, pin in occurrences:
         if pin not in queried:
             continue  # dropped by the cap
+        if pin not in by_pin:
+            by_pin[pin] = []
+            pin_order.append(pin)
+        by_pin[pin].append((path, line))
+
+    findings: List[Finding] = []
+    for pin in pin_order:
         vulns = results.get(pin)
-        if vulns:  # non-empty list; None (outage) or [] (clean) → no finding
-            _eco, name, version = pin
-            # The real added line, so a suggested upgrade rewrites what is actually
-            # in the file rather than a reconstruction of it.
-            snippet = next(
-                (text for ln, text in added_by_file.get(path, []) if ln == line), None
-            )
-            findings.append(_vuln_finding(name, version, vulns, path, line, snippet))
+        if not vulns:  # None (outage) or [] (clean) → no finding
+            continue
+        locs = by_pin[pin]
+        path, line = locs[0]
+        _eco, name, version = pin
+        snippet = next(
+            (text for ln, text in added_by_file.get(path, []) if ln == line), None
+        )
+        finding = _vuln_finding(name, version, vulns, path, line, snippet)
+        other_files = sorted({p for p, _ in locs[1:] if p != path})
+        if other_files:
+            n = len(other_files)
+            noun = "file" if n == 1 else "files"
+            finding.message += f" (also in {n} other {noun}: {', '.join(other_files[:3])})"
+        findings.append(finding)
     return findings

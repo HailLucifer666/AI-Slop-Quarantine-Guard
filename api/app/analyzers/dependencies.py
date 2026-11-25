@@ -11,6 +11,7 @@ in manifests.py), and a dependency is only considered "new" when its name appear
 on an added diff line.
 """
 
+import asyncio
 import re
 from typing import Awaitable, Callable, Dict, List, Optional
 
@@ -155,7 +156,9 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
         fetch_file (optional)   — async (path) -> content|None, for injection/tests.
         check_exists (optional) — async (ecosystem, name, client) -> Existence.
     """
-    added_by_file = _added_lines_by_file(diff)
+    added_by_file = repo_context.get("added_by_file")
+    if added_by_file is None:
+        added_by_file = _added_lines_by_file(diff)
 
     repo = repo_context.get("repo", "")
     head_sha = repo_context.get("head_sha", "")
@@ -210,6 +213,7 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
                 npmrc_scopes = npmrc_private_scopes(npmrc_content) if npmrc_content else set()
 
             seen: set[str] = set()
+            to_check: list[tuple[str, int, str]] = []
             for name in extract_dependency_names(path, content):
                 if name in seen:
                     continue
@@ -217,9 +221,17 @@ async def check_dependencies(diff: str, repo_context: dict) -> List[Finding]:
                 if line is None:
                     continue  # declared but not touched in this PR
                 seen.add(name)
-
                 snippet = next(c for ln, c in added if ln == line)
-                result = await exists_fn(ecosystem, name, client)
+                to_check.append((name, line, snippet))
+
+            sem = asyncio.Semaphore(16)
+
+            async def _check_one(pkg_name: str):
+                async with sem:
+                    return await exists_fn(ecosystem, pkg_name, client)
+
+            results = await asyncio.gather(*(_check_one(n) for n, _, _ in to_check))
+            for (name, line, snippet), result in zip(to_check, results):
                 if result is Existence.MISSING:
                     # Downgrade ladder, most-specific intent signal first — every rung
                     # is derived (shared path classifier / manifest name fields /

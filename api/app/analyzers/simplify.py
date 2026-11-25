@@ -143,10 +143,34 @@ def _if_returning_booleans(node: ast.If) -> Optional[Rewrite]:
 
 
 def _is_boolean_valued(node: ast.expr) -> bool:
-    """True when the expression already evaluates to a bool, so bool() adds nothing."""
-    return isinstance(node, (ast.Compare, ast.BoolOp)) or (
+    """True when the expression is guaranteed to evaluate to a bool, so bool() adds nothing.
+
+    Note: ``ast.BoolOp`` (``a and b``, ``a or b``) is deliberately NOT included — in
+    Python, ``and``/``or`` return one of their operands (e.g. ``"x" and "y"`` returns
+    ``"y"``, not ``True``), so omitting ``bool()`` would silently change the return type.
+    """
+    return isinstance(node, ast.Compare) or (
         isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not)
     )
+
+
+def _is_pure_default(node: ast.expr) -> bool:
+    """True when ``node`` can safely be evaluated eagerly inside ``d.get(k, default)``.
+
+    In ``if k in d: v = d[k] else: v = default`` (and ``try/except KeyError``), the
+    fallback branch is LAZY — it runs only on a miss. Rewriting to ``d.get(k, default)``
+    evaluates ``default`` EAGERLY on every call, so a function call (``compute()``),
+    subscript, or comprehension must never be hoisted into ``d.get()``.
+    """
+    if isinstance(node, (ast.Constant, ast.Name)):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _is_pure_default(node.value)
+    if isinstance(node, ast.UnaryOp):
+        return _is_pure_default(node.operand)
+    if isinstance(node, ast.Tuple):
+        return all(_is_pure_default(e) for e in node.elts)
+    return False
 
 
 def _if_else_to_ternary(node: ast.If) -> Optional[Rewrite]:
@@ -183,7 +207,7 @@ def _membership_to_get(node: ast.If) -> Optional[Rewrite]:
     if not _same(lookup.value, container) or not _same(lookup.slice, key):
         return None
     default_expr = other[1]
-    if not isinstance(default_expr, ast.expr):
+    if not isinstance(default_expr, ast.expr) or not _is_pure_default(default_expr):
         return None
     return (
         "membership test guarding a dict lookup",
@@ -225,7 +249,7 @@ def _try_keyerror_to_get(node: ast.Try) -> Optional[Rewrite]:
         lookup = first[1]
         default = second[1]
         prefix = f"{first[0]} = "
-    if not isinstance(lookup, ast.Subscript) or default is None:
+    if not isinstance(lookup, ast.Subscript) or default is None or not _is_pure_default(default):
         return None
     return (
         "try/except KeyError around a dict lookup",
@@ -406,9 +430,14 @@ async def check_simplify(diff: str, repo_context: dict) -> List[Finding]:
     token = repo_context.get("token", "")
     one_arg: Optional[Callable[[str], Awaitable[Optional[str]]]] = repo_context.get("fetch_file")
 
+    pre_added = repo_context.get("added_by_file")
     added_by_file: dict[str, dict[int, str]] = {}
-    for path, line, content in parse_diff(diff):
-        added_by_file.setdefault(path, {})[line] = content
+    if pre_added is not None:
+        for path, pairs in pre_added.items():
+            added_by_file[path] = dict(pairs)
+    else:
+        for path, line, content in parse_diff(diff):
+            added_by_file.setdefault(path, {})[line] = content
 
     findings: List[Finding] = []
     for path, added in added_by_file.items():

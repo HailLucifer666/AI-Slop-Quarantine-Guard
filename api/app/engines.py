@@ -20,8 +20,13 @@ import logging
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+_ORIG_WHICH = shutil.which
+_ORIG_RUN = subprocess.run
+_PROBE_CACHE: Optional[tuple[float, Dict[str, "EngineStatus"]]] = None
 
 logger = logging.getLogger("engines")
 
@@ -143,6 +148,23 @@ def probe_all() -> Dict[str, EngineStatus]:
     return {engine.name: probe(engine) for engine in ENGINES}
 
 
+def probe_all_cached(ttl_seconds: float = 300.0) -> Dict[str, EngineStatus]:
+    """TTL-cached ``probe_all()`` for hot paths (scans & PR jobs).
+
+    Automatically bypasses the cache if ``shutil.which`` or ``subprocess.run`` has been
+    monkeypatched (e.g. in unit tests), so tests always observe their patched environment.
+    """
+    global _PROBE_CACHE
+    if shutil.which is not _ORIG_WHICH or subprocess.run is not _ORIG_RUN:
+        return probe_all()
+    now = time.monotonic()
+    if _PROBE_CACHE is not None and (now - _PROBE_CACHE[0]) < ttl_seconds:
+        return dict(_PROBE_CACHE[1])
+    statuses = probe_all()
+    _PROBE_CACHE = (now, statuses)
+    return dict(statuses)
+
+
 def availability() -> dict:
     """Engine availability for /api/health, plus what each missing engine costs.
 
@@ -164,13 +186,17 @@ def availability() -> dict:
     }
 
 
-def rules_missing_an_engine() -> Dict[str, List[str]]:
+def rules_missing_an_engine(
+    statuses: Optional[Dict[str, EngineStatus]] = None,
+) -> Dict[str, List[str]]:
     """Rule id -> engines it expects that are not installed.
 
     Consumed by the coverage layer so a check backed only by a fallback says so, instead
-    of implying the advertised engine produced its result.
+    of implying the advertised engine produced its result. Accepts pre-probed ``statuses``
+    so callers don't spawn the same 5 subprocess probes twice per scan.
     """
-    statuses = probe_all()
+    if statuses is None:
+        statuses = probe_all()
     by_rule: Dict[str, List[str]] = {}
     for engine in ENGINES:
         if statuses[engine.name].available:

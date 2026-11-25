@@ -25,6 +25,7 @@ crates.io and range-spec resolution → backlog. Only dependencies appearing on
 *added* lines are checked — the PR is judged on what it introduced.
 """
 
+import asyncio
 import re
 from typing import Callable, List, Optional
 
@@ -166,9 +167,11 @@ async def check_licenses(
     assert isinstance(head_sha, str)
     assert isinstance(token, str)
 
-    added_by_file: dict[str, List[tuple[int, str]]] = {}
-    for path, line, content in parse_diff(diff):
-        added_by_file.setdefault(path, []).append((line, content))
+    added_by_file = repo_context.get("added_by_file")
+    if added_by_file is None:
+        added_by_file = {}
+        for path, line, content in parse_diff(diff):
+            added_by_file.setdefault(path, []).append((line, content))
 
     findings: List[Finding] = []
     async with httpx.AsyncClient(timeout=10) as client:
@@ -194,11 +197,21 @@ async def check_licenses(
             content = await fetch_file(repo, path, head_sha, token)
             if content is None:
                 continue  # unfetchable manifest → silent (protects zero-FP)
+            to_check: list[tuple[str, int]] = []
             for name in extract_dependency_names(path, content):
                 manifest_line = _name_present(name, added)
                 if manifest_line is None:
                     continue  # not introduced by this PR
-                label = await fetch_license(ecosystem, name, client)
+                to_check.append((name, manifest_line))
+
+            sem = asyncio.Semaphore(16)
+
+            async def _fetch_one(pkg_name: str):
+                async with sem:
+                    return await fetch_license(ecosystem, pkg_name, client)
+
+            labels = await asyncio.gather(*(_fetch_one(n) for n, _ in to_check))
+            for (name, manifest_line), label in zip(to_check, labels):
                 if not label:
                     continue  # unreachable or no license → silent
                 m = _COPYLEFT.search(label)

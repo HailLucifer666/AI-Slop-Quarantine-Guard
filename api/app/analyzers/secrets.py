@@ -20,6 +20,7 @@ No network, no verification, no entropy guessing — distinctive shapes only,
 which is where regex secret-scanning actually earns trust.
 """
 
+import math
 import re
 from typing import List
 
@@ -82,6 +83,7 @@ _PEM_BODY = re.compile(r"^[A-Za-z0-9+/]{32,}={0,2}$")
 _EXAMPLE_PATH = re.compile(
     r"(?:^|/)(?:docs?|examples?|samples?)(?:/|$)"
     r"|\.(?:example|sample|dist|template)(?:$|\.)"
+    r"|\.(?:md|markdown|rst|txt)$"
     r"|(?:^|/)\.env\.[^/]*example"
     r"|(?:^|/)\.env(?:\.[^/]*)?\.local$"  # .env.local / .env.production.local — local, gitignored, not a committed leak
     r"|(?:^|/)docker-compose"  # compose files carry local/dev/test config, not real leaks
@@ -89,9 +91,14 @@ _EXAMPLE_PATH = re.compile(
     re.IGNORECASE,
 )
 
+# One canonical credential-word family — derived by both the assignment regexes and
+# the label-echo check so they can never drift (audit QW5, 2026-11-12).
+_CRED_WORD_SRC = r"secret|token|pass(?:word|wd|phrase)|pwd|api[_-]?key|access[_-]?key"
+_CRED_WORD = re.compile(_CRED_WORD_SRC, re.IGNORECASE)
+
 # HIGH tier: a credential-named identifier assigned a quoted literal >= 8 chars.
 _ASSIGNMENT = re.compile(
-    r"""(?P<name>\b\w*(?:secret|token|passwd|password|pwd|api[_-]?key|access[_-]?key)\w*\b)"""
+    rf"""(?P<name>\b\w*(?:{_CRED_WORD_SRC})\w*\b)"""
     r"""\s*[:=]\s*['"](?P<value>[^'"]{8,})['"]""",
     re.IGNORECASE,
 )
@@ -103,10 +110,66 @@ _ASSIGNMENT = re.compile(
 # as if they were hardcoded literals.
 _DOTENV_PATH = re.compile(r"(?:^|/)\.env(?:\.[^/]*)?$", re.IGNORECASE)
 _ASSIGNMENT_UNQUOTED = re.compile(
-    r"""^\s*(?P<name>\w*(?:secret|token|passwd|password|pwd|api[_-]?key|access[_-]?key)\w*)"""
+    rf"""^\s*(?P<name>\w*(?:{_CRED_WORD_SRC})\w*)"""
     r"""\s*=\s*(?P<value>\S{8,})\s*$""",
     re.IGNORECASE,
 )
+
+# Identifier prefixes/suffixes that denote UI error codes, i18n keys, keychain service
+# names, header names, or config metadata — NEVER a hardcoded credential value.
+# Applied ONLY to the generic HIGH tier (never to distinctive CERTAIN tokens).
+_NONSECRET_NAME_PREFIXES = (
+    "needs_", "missing_", "invalid_", "err_", "error_", "msg_", "label_",
+)
+_NONSECRET_NAME_SUFFIXES = (
+    "_not_found", "_required", "_missing", "_invalid", "_error", "_err",
+    "_message", "_msg", "_label", "_title", "_hint", "_placeholder",
+    "_service", "_header", "_env", "_env_var", "_var", "_file", "_path",
+    "_url", "_uri", "_endpoint", "_host", "_port", "_scope", "_audience",
+    "_issuer", "_prefix", "_suffix", "_regex", "_pattern", "_format",
+    "_type", "_kind", "_mode", "_state", "_status", "_event", "_metric",
+    "_key_name", "_token_name", "_cookie", "_cookies",
+)
+
+_COOKIE_PREFIXES = ("__host-", "__secure-")
+_RUST_CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]")
+
+
+def _is_minified_line(content: str) -> bool:
+    """True for minified/bundled single lines (>500 chars, <10% whitespace)."""
+    if len(content) <= 500:
+        return False
+    ws = sum(1 for ch in content if ch.isspace())
+    return (ws / len(content)) < 0.10
+
+
+def _is_nonsecret_name(name: str) -> bool:
+    low = name.lower()
+    return low.startswith(_NONSECRET_NAME_PREFIXES) or low.endswith(_NONSECRET_NAME_SUFFIXES)
+
+
+def _shannon_entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    counts: dict[str, int] = {}
+    for ch in s:
+        counts[ch] = counts.get(ch, 0) + 1
+    n = len(s)
+    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+
+
+def _is_valid_github_pat(token: str) -> bool:
+    """Distinguish a real GitHub fine-grained PAT from a snake_case identifier like
+    ``github_pat_required_prefix_length`` (audit QW4). Real PAT payloads (and pinned
+    synthetic fixtures like ``github_pat_SYNTHETIC_GITHUB_PAT_123``) carry digits
+    and/or mixed-case alphanumerics; pure-letter snake_case identifiers do not."""
+    body = token[len("github_pat_"):]
+    if re.fullmatch(r"[A-Za-z0-9]{22}_[A-Za-z0-9]{59}", body):
+        return True
+    has_digit = any(ch.isdigit() for ch in body)
+    has_upper = any(ch.isupper() for ch in body)
+    has_lower = any(ch.islower() for ch in body)
+    return has_digit or (has_upper and has_lower)
 
 
 # Value-level tells that a credential-named assignment is NOT a real secret — applied
@@ -132,18 +195,18 @@ def _is_sequential_placeholder(v: str) -> bool:
         return False
     u = sorted(set(v))
     return len(u) >= 6 and (ord(u[-1]) - ord(u[0])) == len(u) - 1
-# A lowercase slug / dotted identifier (no digits) — a config value, marker, or audience,
-# not a high-entropy random secret. Digit-bearing values (e.g. real-looking passwords) are
-# deliberately NOT matched here, so genuine credentials in app code still surface.
+# A lowercase slug / dotted identifier — a config value, reverse-DNS keychain service
+# ID (`com.codebuff.byok.v1`), or audience, not a high-entropy random secret. Short
+# version tags (`v1`, `v2`) are allowed; arbitrary digit-bearing passwords are NOT.
 _SLUG_VALUE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
-_CONST_VALUE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_REVERSE_DNS = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+){2,}$")
+# ALL_CAPS constant or dunder sentinel (`__FREEBUFF_OWNER_START__`).
+_CONST_VALUE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_DUNDER_SENTINEL = re.compile(r"^__[A-Za-z0-9_]+__$")
 
 # A quoted value that reads as an English phrase — letters, spaces, apostrophes,
 # hyphens, optional sentence punctuation, never a digit or symbol. Quoted tier only.
 _PROSE_VALUE = re.compile(r"^[A-Za-z][A-Za-z' \-]*[.!?]?$")
-# The credential-word family _ASSIGNMENT's name group matches. A UI label echoes its
-# own category name ("secrets: \"Leaked secrets\""); a real value does not.
-_CRED_WORD = re.compile(r"secret|token|pass(?:word|wd|phrase)|pwd|api[_-]?key|access[_-]?key", re.IGNORECASE)
 
 
 def _looks_nonsecret_value(value: str) -> bool:
@@ -151,6 +214,13 @@ def _looks_nonsecret_value(value: str) -> bool:
     if not v:
         return True
     if _URL_VALUE.match(v) or _ENV_REF_VALUE.match(v):
+        return True
+    # Shell command substitution (`$(...)` / backticks) is dynamic runtime execution,
+    # CLI flags (`--print-proxy-auth-token`) and cookie-name prefixes (`__Host-*`,
+    # `__Secure-*`) are constants — never stored credentials (Scan #31).
+    if v.startswith(("$(" , "`", "--")):
+        return True
+    if v.lower().startswith(_COOKIE_PREFIXES):
         return True
     if "***" in v or "..." in v or "…" in v:
         return True
@@ -161,26 +231,29 @@ def _looks_nonsecret_value(value: str) -> bool:
     low = v.lower()
     if any(w in low for w in _NONSECRET_WORDS):
         return True
+    if _DUNDER_SENTINEL.match(v) or _CONST_VALUE.match(v):
+        return True
+    if _REVERSE_DNS.match(v):
+        return True
     if _SLUG_VALUE.match(v) and not any(ch.isdigit() for ch in v):
         return True
-    if _CONST_VALUE.match(v):
+    # Entropy floor for non-spacey tokens: real random secrets/passwords exceed 2.7
+    # bits/char; repetitive or low-entropy identifiers do not.
+    if " " not in v and _shannon_entropy(v) < 2.7:
         return True
     return False
 
 
 def _is_label_echo(name: str, value: str) -> bool:
     """True if a quoted value reads as an English phrase AND echoes the credential
-    word in its own key's name ("secrets: \\"Leaked secrets\\""). UI labels echo by
-    design; real values do not. Spacey values that do NOT echo — a passphrase on a
-    generically-named key — still surface: silence there would hide the one
-    credential class whose values legitimately contain spaces."""
+    word in its own key's name (normalized so ``api_key`` matches ``"API key"``).
+    UI labels and error messages echo by design; real passphrases do not."""
     m = _CRED_WORD.search(name)
-    return (
-        " " in value
-        and bool(_PROSE_VALUE.match(value))
-        and m is not None
-        and m.group(0).lower() in value.lower()
-    )
+    if not (" " in value and bool(_PROSE_VALUE.match(value)) and m is not None):
+        return False
+    cred_norm = re.sub(r"[_-]+", " ", m.group(0).lower())
+    val_norm = re.sub(r"[_-]+", " ", value.lower())
+    return cred_norm in val_norm
 
 
 def _is_allowlisted(line: str) -> bool:
@@ -347,21 +420,30 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
 
     # Group added lines per file (parse_diff yields them in order) so a PEM header
     # can look ahead for its key body — a bare header is not a provable secret.
-    by_file: dict[str, List[tuple[int, str]]] = {}
-    for path, line, content in parse_diff(diff):
-        by_file.setdefault(path, []).append((line, content))
+    by_file = repo_context.get("added_by_file")
+    if by_file is None:
+        by_file = {}
+        for path, line, content in parse_diff(diff):
+            by_file.setdefault(path, []).append((line, content))
 
     for path, added in by_file.items():
         in_test = in_test_path(path)
         in_example = bool(_EXAMPLE_PATH.search(path))
+        is_rust = path.lower().endswith(".rs")
+        in_rust_test_block = False
         for idx, (line, content) in enumerate(added):
+            if is_rust and _RUST_CFG_TEST.match(content):
+                in_rust_test_block = True
+            line_in_test = in_test or in_rust_test_block
             matched = False
             for label, pattern in _CERTAIN_PATTERNS:
                 m = pattern.search(content)
                 if not m:
                     continue
-                if _is_allowlisted(_window(content, m.start(), m.end())):
-                    matched = True  # a real match existed here; don't also fall through to the generic tier
+                if label == "GitHub fine-grained token" and not _is_valid_github_pat(m.group(0)):
+                    continue  # snake_case identifier like github_pat_required_prefix_length
+                if _is_allowlisted(m.group(0)):
+                    matched = True  # self-identifying example token (e.g. AWS's documented EXAMPLE key)
                     break
                 # A token whose own value carries a fake-marker word is self-identifying
                 # fixture material — downgraded on every path (the value, not the
@@ -395,7 +477,7 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                         matched = True
                         break
                     # A multi-line key body follows: real key material — existing tiers.
-                if in_test:
+                if line_in_test:
                     finding = _certain_in_test(label, m.group(0), path, line)
                 elif in_example:
                     finding = _advisory(label, m.group(0), path, line, "in an example/template file")
@@ -409,6 +491,8 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
             if matched:
                 continue  # one finding per line; CERTAIN wins over HIGH
 
+            if _is_minified_line(content):
+                continue
             a = _ASSIGNMENT.search(content)
             if a is not None and _is_label_echo(a.group("name"), a.group("value")):
                 # Quoted tier only: a phrase value that echoes its own credential
@@ -424,7 +508,12 @@ async def check_secrets(diff: str, repo_context: dict) -> List[Finding]:
                 # test/example/doc/compose paths (fixtures, not leaks), values that
                 # provably aren't secrets (URLs, env refs, markers, enums, masks), or
                 # an allowlist marker near THIS assignment (not just anywhere on the line).
-                if in_test or in_example or _looks_nonsecret_value(a.group("value")):
+                if (
+                    line_in_test
+                    or in_example
+                    or _is_nonsecret_name(a.group("name"))
+                    or _looks_nonsecret_value(a.group("value"))
+                ):
                     continue
                 if _is_allowlisted(_window(content, a.start(), a.end())):
                     continue

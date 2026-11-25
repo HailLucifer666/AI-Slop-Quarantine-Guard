@@ -69,7 +69,14 @@ async def lifespan(_app: FastAPI):
         reconciler.cancel()
 
 
-app = FastAPI(title="AI Slop Quarantine Guard", lifespan=lifespan)
+_is_dev = settings.environment == "development"
+app = FastAPI(
+    title="AI Slop Quarantine Guard",
+    lifespan=lifespan,
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
+    openapi_url="/openapi.json" if _is_dev else None,
+)
 
 # The Next.js dashboard calls these endpoints from the browser.
 _origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]

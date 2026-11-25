@@ -22,8 +22,11 @@ export function buildFixPrompt(scan: ScanDetail): string {
     ? ` · ${suppressedCount} director${suppressedCount === 1 ? "y" : "ies"} excluded by the repository's own ignore rules (not examined)`
     : ""
 
+  const shaPart = scan.resolved_sha ? ` · commit ${scan.resolved_sha.slice(0, 10)}` : ""
+  const rulesVer = scan.engine_versions?.rules_version
+  const rulesPart = rulesVer ? ` · rules v${rulesVer}` : ""
   const out: string[] = []
-  out.push(`# Code-scan findings — ${shortRef(scan.ref)} (scan #${scan.id})`)
+  out.push(`# Code-scan findings — ${shortRef(scan.ref)} (scan #${scan.id}${shaPart}${rulesPart})`)
   out.push(`${total} finding${total === 1 ? "" : "s"} · ${blockEligible} block-eligible (provable) · ${advisory} advisory · ${filesScanned} files scanned${skipped}${suppressed}`)
   out.push("")
   out.push(

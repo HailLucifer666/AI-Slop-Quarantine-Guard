@@ -75,7 +75,7 @@ Each check has a permanent ID (a "Rule ID") so you can reference, suppress, or c
 | **SQG003** | Placeholder / incomplete code (`TODO`, empty function bodies, `throw "not implemented"`) | MEDIUM | Never blocks |
 | **SQG004** | Known-vulnerable dependency (CVE match — a published security flaw in a package version you're using) | HIGH — the match is factual, but "your code is exploitable" requires deeper analysis we don't do yet | Never blocks (advisory) |
 | **SQG005** | Risky or incompatible license (e.g., GPL in a commercial product) | HIGH | Never blocks |
-| **SQG006** | Outdated dependency | HIGH | Never blocks |
+| **SQG006** | Dangerous code patterns (AST-backed SAST: `eval`/`exec`, command injection, unsafe deserialization, DOM-XSS) | HIGH — proven sink pattern, exploitability depends on dataflow | Never blocks (advisory) |
 | **SQG007** | Typosquatted dependency name (`reqeusts` for `requests`) | HIGH — a suspicion about intent, never a provable fact | Always on, advisory only, never blocks |
 | **SQG008** | AI scratchpad committed by accident (`<thinking>` blocks, plan dumps) | HIGH — but narrow regex, text/markdown files only | **Not implemented** (was mis-numbered SQG007; see CHECKS_CATALOG.md) |
 | **SQG009** | Avoidable complexity — several lines of code that one equivalent line replaces | MEDIUM — the shorter form is derived from the syntax tree and shown verbatim, but taking it is a judgement | Never blocks (advisory) |

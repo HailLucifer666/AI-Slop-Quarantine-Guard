@@ -153,9 +153,11 @@ async def check_typosquat(diff: str, repo_context: dict) -> List[Finding]:
     scan-#18 bleak fix (ADR-025). Fail-safe: no created_fn wired, or None returned
     (outage, unknown name, PyPI ``releases`` deprecation) → the finding STAYS.
     """
-    added_by_file: dict[str, list[tuple[int, str]]] = {}
-    for path, line, content in parse_diff(diff):
-        added_by_file.setdefault(path, []).append((line, content))
+    added_by_file = repo_context.get("added_by_file")
+    if added_by_file is None:
+        added_by_file = {}
+        for path, line, content in parse_diff(diff):
+            added_by_file.setdefault(path, []).append((line, content))
 
     repo = repo_context.get("repo", "")
     head_sha = repo_context.get("head_sha", "")

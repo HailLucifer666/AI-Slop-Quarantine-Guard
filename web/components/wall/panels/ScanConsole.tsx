@@ -66,11 +66,18 @@ export function ScanConsole({ initialUrl, onOpenFindings }: { initialUrl?: strin
       try {
         s = await getScan(id)
         failures = 0
-      } catch {
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : ""
+        const isRateLimit = /rate limit|429/i.test(msg)
         failures += 1
-        if (failures >= 3)
-          throw new Error("Lost contact with the scanner API — check that it is running, then try again.")
-        await new Promise((r) => setTimeout(r, POLL_MS))
+        if (failures >= 3) {
+          throw new Error(
+            msg && !/failed to fetch|networkerror/i.test(msg)
+              ? `Scanner API error: ${msg}`
+              : "Lost contact with the scanner API — check that it is running, then try again."
+          )
+        }
+        await new Promise((r) => setTimeout(r, isRateLimit ? POLL_MS * 3 : POLL_MS))
         continue
       }
       setScan(s)

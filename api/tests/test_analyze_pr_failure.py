@@ -97,7 +97,8 @@ async def test_failure_before_check_run_opens_does_not_call_update(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_successful_analysis_does_not_record_a_failure_event(monkeypatch):
+async def test_failed_diff_fetch_publishes_neutral_unverified_not_green_success(monkeypatch):
+    """A failed diff fetch (None) must NEVER publish green 'success' (Gate A / Class 14)."""
     events = []
 
     async def fake_token(_installation_id):
@@ -107,7 +108,7 @@ async def test_successful_analysis_does_not_record_a_failure_event(monkeypatch):
         return 42
 
     async def fake_fetch_pr_diff(_repo, _pr, _token):
-        return None  # "nothing to analyze" path — a clean, successful outcome
+        return None  # rate-limited / 500 / unreachable diff fetch
 
     update_calls = []
 
@@ -127,5 +128,9 @@ async def test_successful_analysis_does_not_record_a_failure_event(monkeypatch):
     result = await worker.analyze_pr("octo/repo", 7, "abc123", 999)
 
     assert result["files"] == {}
-    assert update_calls == [("octo/repo", 42, "success", "✅ Nothing to analyze in this change.")]
+    assert len(update_calls) == 1
+    repo, check_run_id, conclusion, summary = update_calls[0]
+    assert (repo, check_run_id) == ("octo/repo", 42)
+    assert conclusion == "neutral"
+    assert "could not examine" in summary.lower()
     assert events == []

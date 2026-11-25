@@ -168,7 +168,7 @@ BINARY_EXTS = {
 # the per-file cap (bounded instead by LOCKFILE_MAX_BYTES) rather than being "skipped"
 # at exactly the moment they matter most.
 LOCKFILE_NAMES = frozenset({
-    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json",
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "npm-shrinkwrap.json",
     "poetry.lock", "Pipfile.lock", "uv.lock",
     "Cargo.lock", "go.sum", "Gemfile.lock", "composer.lock", "packages.lock.json",
 })
@@ -309,7 +309,8 @@ def walk_dir(root: str) -> IngestResult:
                 size = os.path.getsize(abs_path)
             except OSError:
                 continue
-            if size > MAX_FILE_BYTES:
+            cap = LOCKFILE_MAX_BYTES if name in LOCKFILE_NAMES else MAX_FILE_BYTES
+            if size > cap:
                 _accumulate(files, skipped, total, rel, b"", size)
                 continue
             try:
@@ -384,11 +385,15 @@ def read_zip(data: bytes) -> IngestResult:
             return fname[len(prefix):] if prefix and fname.startswith(prefix) else fname
 
         # Pool the archive's own .gitignore/.dockerignore patterns first.
+        # Capped via _read_entry_capped so an attacker-crafted zip-bomb .gitignore
+        # cannot exhaust memory before the main loop's cap even runs.
         ignore_lines: List[str] = []
         for info in names:
             if _rel(info.filename).replace("\\", "/").rsplit("/", 1)[-1] in _IGNORE_SPEC_FILENAMES:
                 try:
-                    ignore_lines.extend(zf.read(info).decode("utf-8", errors="ignore").splitlines())
+                    raw_ignore = _read_entry_capped(zf, info, MAX_FILE_BYTES)
+                    if raw_ignore is not None:
+                        ignore_lines.extend(raw_ignore.decode("utf-8", errors="ignore").splitlines())
                 except (RuntimeError, zipfile.BadZipFile):
                     pass
         spec = _build_ignore_spec(ignore_lines)
@@ -409,13 +414,15 @@ def read_zip(data: bytes) -> IngestResult:
                 if note not in suppressed:
                     suppressed.append(note)  # one entry per directory, not per file
                 continue
+            base = rel.replace("\\", "/").rsplit("/", 1)[-1]
+            cap = LOCKFILE_MAX_BYTES if base in LOCKFILE_NAMES else MAX_FILE_BYTES
             try:
-                raw = _read_entry_capped(zf, info, MAX_FILE_BYTES)
+                raw = _read_entry_capped(zf, info, cap)
             except (RuntimeError, zipfile.BadZipFile):
                 skipped.append(f"{rel} (unreadable: encrypted or corrupt)")
                 continue
             if raw is None:
-                skipped.append(f"{rel} (exceeds {MAX_FILE_BYTES // 1024}KB file cap)")
+                skipped.append(f"{rel} (exceeds {cap // 1024}KB file cap)")
                 continue
             _accumulate(files, skipped, total, rel, raw, len(raw))
     return IngestResult(files=files, skipped=skipped, suppressed=suppressed)

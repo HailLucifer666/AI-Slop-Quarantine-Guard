@@ -11,12 +11,12 @@
 >
 > | Check | What actually runs | Planned engine (not yet wired) |
 > |---|---|---|
-> | SQG001 | Live PyPI / npm / crates.io registry lookups | — |
-> | SQG002 | Curated regex + format validation (`analyzers/secrets.py`) | gitleaks |
-> | SQG003 | Regex over added lines (`analyzers/placeholders.py`) | tree-sitter AST |
-> | SQG004 | Live OSV.dev HTTP API (`analyzers/vulns.py`) over pypi, npm, crates, go, maven, rubygems, packagist, nuget | Trivy, osv-scanner |
+> | SQG001 | Live PyPI / npm / crates.io registry lookups (bounded concurrency) | — |
+> | SQG002 | Format-validated CERTAIN tokens + 4-factor entropy/sentinel/taxonomy HIGH classifier (`analyzers/secrets.py`) | gitleaks |
+> | SQG003 | Tree-sitter AST comment/stub detector + mode-aware TODO filtering (`analyzers/placeholders.py`) | — |
+> | SQG004 | Live OSV.dev HTTP API (`analyzers/vulns.py`) over pypi, npm, crates, go, maven, rubygems, packagist, nuget (incl. `pnpm-lock.yaml`, `bun.lock`, `uv.lock`) | Trivy, osv-scanner |
 > | SQG005 | PyPI / npm registry license metadata + `composer.lock` declared licenses (`analyzers/licenses.py`) | Trivy, Syft |
-> | SQG006 | Curated regex, Python + JavaScript only (`analyzers/sast.py`) | Semgrep |
+> | SQG006 | Tree-sitter AST sink detector for Python + JavaScript/TypeScript (`analyzers/sast.py`) | Semgrep |
 > | SQG007 | Edit distance against a curated popular-package list + registry-age legitimacy gate (ADR-025) | — |
 > | SQG009 | Python `ast` rewrite detection (`analyzers/simplify.py`) | tree-sitter for JS/TS |
 >

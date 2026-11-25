@@ -274,13 +274,17 @@ def format_review_comment(finding: Finding) -> str:
 
     remediation = finding.remediation
     if remediation and remediation.is_applicable:
+        body_text = (remediation.suggested_replacement or "").rstrip("\n")
+        # If the replacement itself contains triple backticks, open with a longer
+        # fence so the code cannot prematurely close GitHub's suggestion block.
+        fence = "````" if "```" in body_text else "```"
         lines += [
             "",
             remediation.text,
             "",
-            "```suggestion",
-            (remediation.suggested_replacement or "").rstrip("\n"),
-            "```",
+            f"{fence}suggestion",
+            body_text,
+            fence,
         ]
         if remediation.basis:
             lines += ["", f"<sub>Basis: {remediation.basis}.</sub>"]
@@ -321,16 +325,27 @@ def build_review_comments(
     for finding in _sorted(findings):
         if len(comments) >= max_comments:
             break
-        if diff_lines is not None and (finding.file_path, finding.line_start) not in diff_lines:
-            continue
+        end_line = max(finding.line_end, finding.line_start)
+        if diff_lines is not None:
+            if (finding.file_path, finding.line_start) not in diff_lines:
+                continue
+            if end_line > finding.line_start and (finding.file_path, end_line) not in diff_lines:
+                continue
         if finding.fingerprint and _fingerprint_marker(finding) in seen_bodies:
             continue
-        comments.append({
+        comment: dict = {
             "path": finding.file_path,
-            "line": max(finding.line_end, finding.line_start),
+            "line": end_line,
             "side": "RIGHT",
             "body": format_review_comment(finding),
-        })
+        }
+        # Multi-line suggestions MUST declare start_line + start_side; otherwise GitHub
+        # applies a one-click suggestion to `line` (the last line) only, leaving the
+        # earlier lines intact and corrupting the author's code.
+        if end_line > finding.line_start:
+            comment["start_line"] = finding.line_start
+            comment["start_side"] = "RIGHT"
+        comments.append(comment)
     return comments
 
 
