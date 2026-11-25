@@ -1,11 +1,24 @@
 <h1 align="center">AI Slop Quarantine Guard</h1>
 
 <p align="center">
+  <a href="https://github.com/HailLucifer666/AI-Slop-Quarantine-Guard/actions/workflows/ci.yml">
+    <img src="https://github.com/HailLucifer666/AI-Slop-Quarantine-Guard/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  </a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white" alt="Next.js 15" />
+  <img src="https://img.shields.io/badge/AST-Tree--sitter-22C55E" alt="Tree-sitter AST" />
+  <img src="https://img.shields.io/badge/tests-649%20passing-10B981" alt="649 Tests Passing" />
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" />
+  </a>
+</p>
+
+<p align="center">
   <strong>A pre-release quality &amp; security gate for the age of AI-generated code.</strong><br/>
   It runs every machine-checkable test for AI "slop" — hallucinated packages, leaked secrets,
-  known-vulnerable dependencies, risky licenses, dangerous code, placeholder stubs, and typosquats —
-  then explains the results in plain English. It blocks <em>only</em> on facts it can prove, and
-  it never lies to you about one.
+  known-vulnerable dependencies, risky licenses, dangerous code, placeholder stubs, typosquats,
+  and avoidable complexity — then explains the results in plain English. It blocks <em>only</em>
+  on facts it can prove, and it never lies to you about one.
 </p>
 
 ---
@@ -55,25 +68,73 @@ either miss the AI-specific failures or cry wolf so often you stop listening.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    subgraph In["4 Entry Points"]
+      A1["GitHub PR Webhook"]
+      A2["Public Repo URL"]
+      A3["Uploaded .zip"]
+      A4["Local Folder"]
+    end
+
+    In --> Ingest["Safe Ingest<br/>.gitignore · 8MB lockfiles<br/>zip-bomb & symlink guards"]
+    Ingest --> Parse["Parse Once<br/>added_by_file + Tree-sitter AST cache"]
+
+    subgraph Guard["The Guard (8 Concurrent Deterministic Analyzers)"]
+      G1["SQG001 · Registry 404"]
+      G2["SQG002 · Secrets + Entropy"]
+      G3["SQG003 · AST Stubs"]
+      G4["SQG004 · OSV CVEs (8 ecosystems)"]
+      G5["SQG005 · Copyleft Licenses"]
+      G6["SQG006 · Tree-sitter SAST"]
+      G7["SQG007 · Typosquats + Age"]
+      G9["SQG009 · Python AST Simplifier"]
+    end
+
+    Parse --> Guard
+    Guard --> Gate["Honest Verdict Gate<br/>CLEAN · FLAGGED · BLOCKED · UNVERIFIED"]
+    Gate --> GH["GitHub Check-Run<br/>+ Multi-line Suggestions"]
+    Gate --> Wall["Command-Wall Dashboard<br/>+ SHA-Pinned Exports"]
+    Wall -.->|"advisory only (one-way)"| Crew["The Crew<br/>Plain-English AI Explainer"]
 ```
-   PR webhook  ┐
-   Public URL  ├──►  ingest (honors .gitignore, caps lockfiles at 8MB, skips vendored/minified)
-   Upload .zip ├──►  in-memory {path: content}  ──►  parse once (added_by_file + Tree-sitter AST cache)
-   Local folder┘                                            │
-                                                            ▼
-                              ┌──────────── The Guard ────────────┐
-                              │  8 concurrent analyzers (SQG001–  │
-                              │  007, SQG009), per-analyzer time  │
-                              │  budget, batched OSV, bounded     │
-                              │  registry concurrency, fail-safe  │
-                              └───────────────────┬───────────────┘
-                                                  ▼
-                 Honest Verdict Gate (CLEAN / FLAGGED / BLOCKED / UNVERIFIED)
-                                                  ▼
-              GitHub Check-Run (label-only today)   +   Command-Wall dashboard
-                                                  ▼
-                            The Crew — optional plain-English explainer
+
+### Honest Verdict State Machine
+
+A failed diff fetch, timed-out analyzer, or unreadable file can **never** produce a green `success` check:
+
+```mermaid
+stateDiagram-v2
+    [*] --> DiffCheck
+    DiffCheck --> UNVERIFIED : diff unavailable (neutral)
+    DiffCheck --> Analyze : diff available
+    Analyze --> BLOCKED : block_mode=true & CERTAIN finding (failure)
+    Analyze --> FLAGGED : any finding (action_required)
+    Analyze --> UNVERIFIED : 0 findings + analyzer errored/timed out (neutral)
+    Analyze --> CLEAN : 0 findings + all checks conclusive (success)
 ```
+
+## Measured Precision on Real-World Repositories
+
+Every number below was measured directly against live public repositories (no synthetic cherry-picking):
+
+```mermaid
+xychart-beta
+    title "False Positives Before vs. After Tree-sitter AST & v2.0 Hardening"
+    x-axis ["freebuff (v1 #24)", "freebuff (v2 #29)", "agent-browser (v1 #31)", "agent-browser (v2 #34)"]
+    y-axis "False Positives" 0 --> 35
+    bar [31, 0, 9, 0]
+```
+
+| Repository | Files Scanned | Duration | Total Findings | Real Findings | False Positives | Precision |
+|---|---:|---:|---:|---:|---:|---:|
+| `CodebuffAI/freebuff` *(v1 Scan #24)* | 2,557 | 58.8s | 36 | 5 | 31 | 13.9% |
+| **`CodebuffAI/freebuff` *(v2 Scan #29)*** | **2,557** | **44.7s** | **42** | **42** | **0** | **100.0%** |
+| `vercel-labs/agent-browser` *(v1 Scan #31)* | 1,000+ | 14.6s | 129 | 120 *(incl. dupes)* | 9 | 93.0% |
+| **`vercel-labs/agent-browser` *(v2 Scan #34)*** | **1,000+** | **22.4s** | **72** | **72** *(deduped)* | **0** | **100.0%** |
+| **`milind-soni/OpenMausBot` *(v2 Scan #33)*** | — | **7.8s** | **17** | **17** | **0** | **100.0%** |
+| **`cloudflare/security-audit-skill` *(v2 Scan #32)*** | — | **0.4s** | **0** | **0** | **0** | **— (clean)** |
+
+> _What changed between v1 and v2:_ migrating `SQG003`/`SQG006` to Tree-sitter AST eliminated every TypeScript interface/mock `eval()`, static-literal `execSync()`, JSDoc prose, kebab-case `todo-` path, and minified-bundle hit; adding `bun.lock`/`pnpm-lock.yaml`/`uv.lock` uncovered **31 real transitive CVEs** in `freebuff` and deduplicated **48 duplicate lockfile rows** in `agent-browser`.
 
 - **Four ways in:** a GitHub pull-request webhook, a public repo URL, an uploaded `.zip`, or a local folder.
 - **Safe by construction:** ingestion honors `.gitignore`/`.dockerignore`, guards against symlinks and zip bombs, streams multipart uploads under a hard cap, and skips build output, caches, and vendored dependencies. Cloned/zipped code is read as text and **never executed**.
