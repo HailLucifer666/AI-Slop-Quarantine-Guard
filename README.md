@@ -15,7 +15,7 @@
 ![AI Slop Quarantine Guard — the Command Wall dashboard](docs/dashboard.png)
 
 A real-time mission-control view of every scan: live **findings-by-check** ranking
-(SQG001–SQG007), a streaming event feed, recent scans with clean/flagged counts, a
+(SQG001–SQG007, SQG009), a streaming event feed, recent scans with clean/flagged counts, a
 **cleared-vs-caught** tally that separates *block-eligible* findings from *advisory* ones, a
 findings trend, and engine health (queue depth, average scan time). The Guard's honesty model,
 visible at a glance.
@@ -42,44 +42,48 @@ either miss the AI-specific failures or cry wolf so often you stop listening.
 
 | Rule | Catches | How |
 |---|---|---|
-| **SQG001** | Hallucinated / non-existent packages | Live 404 from a *reachable* registry (PyPI, npm, crates) — outage → advisory, never CERTAIN |
-| **SQG002** | Leaked secrets | Distinctive token shapes (AWS, GitHub, Stripe, Slack, Google, PEM keys); generic credential assignments are advisory; values are always redacted |
-| **SQG003** | Placeholder / incomplete code | `NotImplementedError` stubs, ellipsis bodies, "your code here" — string literals & comments are lexically excluded to cut noise |
-| **SQG004** | Known-vulnerable dependencies | Exactly-pinned versions checked against the OSV database (batched) |
-| **SQG005** | Risky licenses | Copyleft / restrictive license metadata from the registry |
-| **SQG006** | Dangerous code (lightweight SAST) | `eval`/`exec`, `os.system`, `shell=True`, unsafe `pickle`/`yaml.load`, `innerHTML`/`dangerouslySetInnerHTML` — sinks inside strings/comments are skipped |
-| **SQG007** | Typosquatting | Edit-distance match against popular package names — **always advisory, never blocks** |
+| **SQG001** | Hallucinated / non-existent packages | Live 404 from a *reachable* registry (PyPI, npm, crates) with bounded concurrency — outage → advisory, never CERTAIN |
+| **SQG002** | Leaked secrets | Format-validated tokens (AWS, GitHub, Stripe, Slack, Google, multi-line PEM keys) + 4-factor entropy/sentinel/cookie/Rust-`#[cfg(test)]` classifier for generic assignments; values are always redacted |
+| **SQG003** | Placeholder / incomplete code | Tree-sitter AST comment/stub detector (`NotImplementedError`, ellipsis bodies, "your code here", mode-aware TODO filtering) — skips test/fixture paths, JSDoc prose, kebab-case paths, and minified bundles |
+| **SQG004** | Known-vulnerable dependencies | Batched OSV.dev lookups across 8 ecosystems (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `go.sum`, `Gemfile.lock`, `composer.lock`, `packages.lock.json`, plus Go/Maven/Gradle/NuGet manifests), deduplicated across lockfiles with fixture paths skipped |
+| **SQG005** | Risky licenses | Copyleft / restrictive license metadata from PyPI/npm registries + inline `composer.lock` declarations |
+| **SQG006** | Dangerous code (AST SAST) | Tree-sitter AST call-site detector for Python & JS/TS: unqualified `eval`/`exec`, dynamic `os.system`/`subprocess(shell=True)`/`child_process.execSync` (CJS & ESM `node:child_process`), unsafe `pickle`/`yaml.load`, weak hashes, DOM-XSS (`innerHTML`/`dangerouslySetInnerHTML`) — immune to interface signatures, method definitions, static-literal commands, and strings/comments |
+| **SQG007** | Typosquatting | Length-scaled edit distance against popular package names + registry-age legitimacy gate — **always advisory, never blocks** |
+| **SQG009** | Avoidable complexity | Python `ast` structural rewrites (e.g. loop → `any()`/comprehension, `if/else` → ternary/`dict.get()`) with verbatim, semantic-preserving patches — **always advisory** |
+
+> _SQG008 (AI reasoning scratchpads) is reserved in the catalog and not yet implemented._
 
 ## How it works
 
 ```
    PR webhook  ┐
-   Public URL  ├──►  ingest (honors .gitignore, skips build output/vendored deps)
-   Upload .zip ├──►  in-memory {path: content}  ──►  synthetic diff
-   Local folder┘                                          │
-                                                          ▼
-                            ┌──────────── The Guard ────────────┐
-                            │  SQG001…SQG007 analyzers (async,   │
-                            │  per-analyzer time budget, OSV     │
-                            │  batched, registry-outage = safe)  │
-                            └───────────────────┬────────────────┘
-                                                ▼
-                       findings (CERTAIN = block-eligible · HIGH/MEDIUM = advisory)
-                                                ▼
-            GitHub Check-Run (label-only today)   +   Command-Wall dashboard
-                                                ▼
-                          The Crew — optional plain-English explainer
+   Public URL  ├──►  ingest (honors .gitignore, caps lockfiles at 8MB, skips vendored/minified)
+   Upload .zip ├──►  in-memory {path: content}  ──►  parse once (added_by_file + Tree-sitter AST cache)
+   Local folder┘                                            │
+                                                            ▼
+                              ┌──────────── The Guard ────────────┐
+                              │  8 concurrent analyzers (SQG001–  │
+                              │  007, SQG009), per-analyzer time  │
+                              │  budget, batched OSV, bounded     │
+                              │  registry concurrency, fail-safe  │
+                              └───────────────────┬───────────────┘
+                                                  ▼
+                 Honest Verdict Gate (CLEAN / FLAGGED / BLOCKED / UNVERIFIED)
+                                                  ▼
+              GitHub Check-Run (label-only today)   +   Command-Wall dashboard
+                                                  ▼
+                            The Crew — optional plain-English explainer
 ```
 
 - **Four ways in:** a GitHub pull-request webhook, a public repo URL, an uploaded `.zip`, or a local folder.
-- **Safe by construction:** ingestion honors `.gitignore`/`.dockerignore` and skips build output, caches, and vendored dependencies, so the scanner judges *shipped source* — not artifacts. Cloned/zipped code is read as text and **never executed**.
-- **Honest gating:** today the GitHub check is **label-only** (clean → success, findings → "action required") — it never blocks a merge. Real blocking is opt-in and gated behind a measured false-positive rate.
+- **Safe by construction:** ingestion honors `.gitignore`/`.dockerignore`, guards against symlinks and zip bombs, streams multipart uploads under a hard cap, and skips build output, caches, and vendored dependencies. Cloned/zipped code is read as text and **never executed**.
+- **Honest gating:** a failed diff fetch or errored/timed-out check degrades to `UNVERIFIED` (`neutral`), never a false green `success`. Today the GitHub check is **label-only** (clean → `success`, findings → `action_required`, unverified → `neutral`) — real blocking is opt-in and gated behind a measured false-positive rate.
 
 ## Tech stack
 
-- **Backend** — Python 3.12 · FastAPI (async) · SQLAlchemy 2.0 · Redis queue + background worker · SQLite by default, PostgreSQL for production. Analyzers are pure-Python/HTTP (no external scanner binaries).
-- **Frontend** — Next.js 15 · React 19 · Tailwind · an "Aurora-on-Black" Command-Wall dashboard.
-- **Quality bar** — 500+ tests; analyzers are gated at **zero false positives** on the negative-fixture set.
+- **Backend** — Python 3.11+ · FastAPI (async; OpenAPI/docs disabled outside `development`) · SQLAlchemy 2.0 · Redis queue + background worker · SQLite by default, PostgreSQL for production. Analyzers use pure-Python + **Tree-sitter** (`tree-sitter-language-pack` wheels) and HTTP — **no external scanner binaries required**.
+- **Frontend** — Next.js 15 · React 19 · Tailwind · an "Aurora-on-Black" Command-Wall dashboard with commit-SHA + rules-version provenance in exported Markdown reports.
+- **Quality bar** — **649 tests** (including real-world regression suites for `CodebuffAI/freebuff`, `vercel-labs/agent-browser`, `openai/codex-security`, and `milind-soni/OpenMausBot`); gated at **0% false positives** and **100% recall** on the accuracy corpus, with `ruff`, `mypy`, `tsc`, `eslint`, and `gitleaks` green in CI.
 
 ## Quick start
 
@@ -145,11 +149,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) — the review gate every change runs: a 
 
 ## Status
 
-Deterministic engine (SQG001–SQG007), whole-repo scanner (URL / zip / local folder), and the
-Command-Wall dashboard are working. The GitHub check is **label-only** — it surfaces findings but
-does not block merges yet. On the roadmap: AST-level placeholder detection, a fuller SAST engine,
-SARIF export, and a public Trust-Score leaderboard.
+Deterministic engine (SQG001–SQG007, SQG009) with Tree-sitter AST analysis, modern lockfile CVE
+coverage (`pnpm-lock.yaml`, `bun.lock`, `uv.lock`, and more), honest `CLEAN`/`FLAGGED`/`BLOCKED`/`UNVERIFIED`
+verdicts, whole-repo scanner (URL / zip / local folder), and the Command-Wall dashboard are
+working. The GitHub check is **label-only** — it surfaces findings but does not block merges yet.
+On the roadmap: multi-language SAST expansion (Go/Java/Rust), JS/TS complexity rewrites, SARIF
+export, and a public Trust-Score leaderboard.
 
 ## License
 
-_No license file yet — add one (e.g. MIT or Apache-2.0) before sharing publicly; without it, others have no legal right to use the code._
+MIT — see [LICENSE](LICENSE).
