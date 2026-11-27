@@ -38,7 +38,7 @@ jobs:
 
       # The vendor requires Node 22.13+ within 22.x (or 24.x/26.x). Don't assume
       # the runner's default Node satisfies that — pin it.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
