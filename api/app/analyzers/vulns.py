@@ -60,8 +60,10 @@ RULE_ID = "SQG004"
 
 _OSV_URL = "https://api.osv.dev/v1/query"
 _OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
-# Our ecosystem key → OSV ecosystem name. Manifests pin only pypi/npm exactly;
-# lockfiles add crates.io + Go (fully resolved, exact versions — see manifests.py).
+# Our ecosystem key → OSV ecosystem name. "go" is fed by go.mod's require/indirect
+# block (VERSIONED_MANIFEST_ECOSYSTEM), NOT by go.sum: a go.sum is a checksum ledger
+# for the module graph and lists versions the build never selects (scan #38: 43 of
+# its 92 findings came from go.sum entries alone).
 _OSV_ECOSYSTEM = {
     "pypi": "PyPI", "npm": "npm", "crates": "crates.io", "go": "Go",
     # Added once app.pinned could read exact versions out of these ecosystems'

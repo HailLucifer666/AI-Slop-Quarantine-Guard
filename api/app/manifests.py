@@ -279,6 +279,15 @@ def extract_dependency_names(filename: str, content: str) -> List[str]:
 # exact versions. That makes them ideal for the vulnerability scanner (SQG004),
 # which needs an exact version to ask OSV "is this known-vulnerable?".
 #
+# go.sum is deliberately absent: it is a checksum ledger for the module *graph*, not
+# the selected build list. It records versions MVS never picks (scan #38, firecrawl,
+# 2026-11-27: 43 of 92 findings were old x/crypto, x/net, x/sys and x/text versions
+# that appear in go.sum while go.mod requires only x/net v0.55.0 and no x/crypto at
+# all). Go's build list is go.mod's require/indirect block, parsed by
+# app.pinned.parse_go_mod and routed through VERSIONED_MANIFEST_ECOSYSTEM. Under-
+# reporting transitive Go modules that appear only in the graph is the honest
+# trade: `go mod graph` would execute the toolchain, which this product forbids.
+#
 # They are deliberately kept OUT of MANIFEST_ECOSYSTEM / extract_dependency_names.
 # Those drive SQG001 (existence) and SQG005 (license), and a lockfile routinely
 # names private-registry packages by their exact name. Existence-checking those
@@ -294,7 +303,6 @@ LOCKFILE_ECOSYSTEM: Dict[str, str] = {
     "poetry.lock": "pypi",
     "uv.lock": "pypi",
     "Cargo.lock": "crates",
-    "go.sum": "go",
     "Gemfile.lock": "rubygems",
     "composer.lock": "packagist",
     "packages.lock.json": "nuget",
@@ -382,26 +390,6 @@ def parse_yarn_lock(content: str) -> List[Tuple[str, str]]:
     return pins
 
 
-def parse_go_sum(content: str) -> List[Tuple[str, str]]:
-    """Extract pinned (module, version) from a go.sum (deduped, ``v`` prefix stripped)."""
-    pins: List[Tuple[str, str]] = []
-    seen: set[Tuple[str, str]] = set()
-    for line in content.splitlines():
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        module, version = parts[0], parts[1]
-        version = version.split("/", 1)[0]  # drop the "/go.mod" suffix line
-        if version.startswith("v"):
-            version = version[1:]  # OSV "Go" versions carry no leading 'v'
-        key = (module, version)
-        if key in seen:
-            continue
-        seen.add(key)
-        pins.append((module, version))
-    return pins
-
-
 def parse_pnpm_lock_yaml(content: str) -> List[Tuple[str, str]]:
     """Extract pinned (name, version) pairs from pnpm-lock.yaml (v6 and v9 formats).
 
@@ -484,8 +472,6 @@ def extract_pinned_lockfile(filename: str, content: str) -> List[Tuple[str, str]
             return parse_pnpm_lock_yaml(content)
         if base == "bun.lock":
             return parse_bun_lock(content)
-        if base == "go.sum":
-            return parse_go_sum(content)
         if base in _EXTRA_LOCKFILE_PARSERS:
             return _EXTRA_LOCKFILE_PARSERS[base](content).pins
     except (tomllib.TOMLDecodeError, json.JSONDecodeError, ValueError, AttributeError):
