@@ -9,7 +9,7 @@ them would be a false positive.
 import json
 import re
 import tomllib
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from app.pinned import (
     ManifestPins,
@@ -62,6 +62,41 @@ def _is_non_registry(spec: str) -> bool:
     return any(spec.startswith(p) for p in _NON_REGISTRY_PREFIXES)
 
 
+# A `scheme:` prefix on a version spec. Plain ranges and dist-tags ("^1.2.3", "latest",
+# "*") have none. `npm:` is the one scheme that still names a registry package — under
+# a different local name — so it is resolved rather than skipped.
+_SPEC_SCHEME = re.compile(r"^([a-z][a-z0-9+.-]*):", re.IGNORECASE)
+# `npm:<target>[@<range>]`, where <target> may be scoped (`@scope/name`).
+_NPM_ALIAS_SPEC = re.compile(r"^npm:((?:@[^/@]+/)?[^@]+)(?:@.+)?$", re.IGNORECASE)
+
+
+def _registry_name(name: str, spec: str) -> Optional[str]:
+    """The package name a registry can answer about, or None when we cannot know it.
+
+    Scan #38 (firecrawl, 2026-11-27): `"typescript-7": "npm:typescript@7.0.2"` was
+    reported as `Package 'typescript-7' does not exist in npm (404)` — CERTAIN and
+    block-eligible — because the local alias *label* was sent to the registry as if it
+    were a package name. An `npm:` alias installs the target package under a different
+    local name, so the label 404s by design; asking about it invents a hallucinated
+    dependency out of a legitimate alias, and the gate would block the PR. Resolving to
+    the target fixes typosquat too (SQG007 reads the same name set): a look-alike alias
+    *target* is still caught, while a look-alike alias *label* is not a package at all.
+
+    Any other `scheme:` spec reaching here is one we cannot interpret — the
+    file:/git:/workspace:/portal:/url forms are filtered before this. Returning the key
+    would turn "I do not understand this spec" into "this package does not exist", the
+    same confident false claim in a different dress (gate E, kee class 4d). Hence None:
+    an unreadable spec produces no claim, never a guess.
+    """
+    m = _SPEC_SCHEME.match(spec)
+    if m is None:
+        return name
+    if m.group(1).lower() == "npm":
+        alias = _NPM_ALIAS_SPEC.match(spec)
+        return alias.group(1) if alias else None
+    return None
+
+
 def parse_requirements_txt(content: str) -> List[str]:
     """Extract package names from a requirements.txt (skips options, comments, VCS/url refs)."""
     names: List[str] = []
@@ -110,8 +145,12 @@ def parse_package_json(content: str) -> Dict[str, str]:
         block = data.get(section)
         if isinstance(block, dict):
             for name, version in block.items():
-                if isinstance(version, str) and not _is_non_registry(version):
-                    deps[name] = version
+                if not isinstance(version, str) or _is_non_registry(version):
+                    continue
+                registry_name = _registry_name(name, version)
+                if registry_name is None:
+                    continue  # a spec form we cannot resolve — never guess a name
+                deps[registry_name] = version
     return deps
 
 
