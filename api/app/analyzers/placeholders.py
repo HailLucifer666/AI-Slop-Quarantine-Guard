@@ -89,10 +89,17 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("ellipsis-only body", re.compile(r"^\s*\.\.\.\s*$")),
     (
         "placeholder prose",
+        # The phrase must BE the comment, not sit inside a sentence. Scan #38
+        # (firecrawl, 2026-11-27): a module doc comment reading "* config and read by
+        # the rest of the code." matched the old unanchored arm and was reported as a
+        # placeholder. A genuine stub says "// rest of the code here" and nothing else,
+        # so the optional comment marker and the end anchor are what separate the two.
         re.compile(
-            r"\b(your code here|rest of (?:the )?code(?: here)?|"
+            r"^\s*(?:(?://+|/\*+|\*+|#+)\s*)?"
+            r"(?:your code here|rest of (?:the )?code here|"
             r"implement (?:this|here)|fill in (?:the )?(?:rest|implementation)|"
-            r"add your .+ here)\b",
+            r"add your .+? here)"
+            r"\s*[.!]?\s*(?:\*/)?\s*$",
             re.IGNORECASE,
         ),
     ),
@@ -107,8 +114,15 @@ def _is_code_file(path: str) -> bool:
     return not low.endswith(_DOC_EXTENSIONS)
 
 
-def _comment_lines_from_ast(path: str, source: str, ast_cache) -> Optional[Tuple[Set[int], Set[int]]]:
-    """Return (all_comment_lines, jsdoc_lines) from Tree-sitter, or None if unavailable."""
+def _ast_line_context(
+    path: str, source: str, ast_cache
+) -> Optional[Tuple[Set[int], Set[int], Set[int]]]:
+    """Return (comment_lines, jsdoc_lines, string_lines) from Tree-sitter, or None.
+
+    ``string_lines`` are the lines of multi-line string literals (docstrings,
+    multi-line templates), minus their interpolations — see FileAst.string_lines.
+    Without them, prose inside a docstring is indistinguishable from code.
+    """
     if not HAS_TREE_SITTER or ts_lang_for(path) is None:
         return None
     file_ast = parse_file_ast(path, source, ast_cache=ast_cache)
@@ -121,7 +135,7 @@ def _comment_lines_from_ast(path: str, source: str, ast_cache) -> Optional[Tuple
             comment_lines.add(ln)
             if c.is_jsdoc:
                 jsdoc_lines.add(ln)
-    return comment_lines, jsdoc_lines
+    return comment_lines, jsdoc_lines, file_ast.string_lines()
 
 
 async def check_placeholders(diff: str, repo_context: dict) -> List[Finding]:
@@ -142,11 +156,18 @@ async def check_placeholders(diff: str, repo_context: dict) -> List[Finding]:
             continue
         lang = lang_for(path)
         source = files_map.get(path) if isinstance(files_map, dict) else None
-        ast_comments = _comment_lines_from_ast(path, source, ast_cache) if source is not None else None
+        ast_comments = _ast_line_context(path, source, ast_cache) if source is not None else None
         comment_lines = ast_comments[0] if ast_comments is not None else None
         jsdoc_lines = ast_comments[1] if ast_comments is not None else set()
+        string_lines = ast_comments[2] if ast_comments is not None else set()
 
         for line, content in added:
+            if line in string_lines:
+                # String DATA, not code. Scan #38 (firecrawl, 2026-11-27): a `...`
+                # prose line inside a module docstring was reported as an ellipsis
+                # stub body. Interpolation lines are excluded from this set, so real
+                # expressions inside a template/f-string are still scanned.
+                continue
             if any(token in content for token in _ALLOWLIST):
                 continue
             if len(content) > 500 and (sum(1 for ch in content if ch.isspace()) / len(content)) < 0.10:

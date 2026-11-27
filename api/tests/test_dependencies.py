@@ -77,6 +77,62 @@ async def test_hallucinated_scoped_npm_flagged():
     assert findings[0].confidence is Confidence.CERTAIN
 
 
+# --- npm alias: the label is not the package ------------------------------
+
+ALIAS_PKG_JSON_DIFF = """\
+--- a/apps/api/package.json
++++ b/apps/api/package.json
+@@ -1,4 +1,5 @@
+ {
+   "dependencies": {
++    "typescript-7": "npm:typescript@7.0.2",
+     "left-pad": "^1.0.0"
+   }
+ }
+"""
+
+
+@pytest.mark.asyncio
+async def test_npm_alias_is_checked_as_its_target_not_as_the_local_label():
+    """Scan #38 (firecrawl, 2026-11-27): a registry 404 for a local alias label became
+    the only block-eligible finding in a 92-finding scan. The registry has never heard
+    of `typescript-7` because it is a label; it installs `typescript`, which exists.
+    """
+    files = {
+        "apps/api/package.json": (
+            '{"dependencies": {"typescript-7": "npm:typescript@7.0.2", '
+            '"left-pad": "^1.0.0"}}'
+        )
+    }
+    # The registry knows the target and (truthfully) 404s the label. Only the target
+    # may be asked, so the label's absence must never become a finding.
+    ctx = _ctx(files, {"typescript": Existence.EXISTS, "typescript-7": Existence.MISSING})
+    findings = await check_dependencies(ALIAS_PKG_JSON_DIFF, ctx)
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_npm_alias_with_a_missing_target_still_blocks():
+    """Negative control: resolving the alias must not disarm the rule. `npm:<missing>`
+    means `npm install` fails, so the finding — and its block — stay. This also pins
+    WHICH name is reported: the target, not the local label."""
+    files = {"package.json": '{"dependencies": {"ts-next": "npm:typescript-next@1.0.0"}}'}
+    diff = """\
+--- a/package.json
++++ b/package.json
+@@ -1,1 +1,1 @@
++  "ts-next": "npm:typescript-next@1.0.0"
+"""
+    ctx = _ctx(files, {"typescript-next": Existence.MISSING, "ts-next": Existence.EXISTS})
+    findings = await check_dependencies(diff, ctx)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "SQG001"
+    assert findings[0].confidence is Confidence.CERTAIN
+    assert findings[0].block_eligible is True
+    assert "typescript-next" in findings[0].message
+
+
 # --- private-registry false-block guard -----------------------------------
 
 @pytest.mark.asyncio

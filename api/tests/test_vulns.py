@@ -49,6 +49,57 @@ async def test_pip_pinned_vuln_flagged():
 
 
 @pytest.mark.asyncio
+async def test_informational_unmaintained_advisory_not_reported():
+    """Scan #38 (firecrawl, 2026-11-27): chrono==0.4.45 was reported as a HIGH
+    vulnerability in two Cargo.lock files for RUSTSEC-2026-0543. OSV marks that record
+    ``informational: "unmaintained"`` with NO ``fixed`` event and no severity — "chrono
+    is unmaintained" is not a vulnerability and there is no patched version to upgrade
+    to, so the finding's remediation could only be false advice.
+    """
+    content = '[[package]]\nname = "chrono"\nversion = "0.4.45"\n'
+    diff = _diff("Cargo.lock", ['name = "chrono"', 'version = "0.4.45"'])
+    informational = {
+        "id": "RUSTSEC-2026-0543",
+        "summary": "chrono is unmaintained",
+        "affected": [{
+            "package": {"name": "chrono", "ecosystem": "crates.io"},
+            "ranges": [{
+                "type": "SEMVER",
+                "events": [{"introduced": "0.0.0-0"}],
+                "database_specific": {"informational": "unmaintained"},
+            }],
+        }],
+    }
+    ctx, kw = _ctx({"Cargo.lock": content}, vulns=[informational])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_real_advisory_beside_an_informational_one_is_still_reported():
+    # Filtering is per advisory, not per pin: a genuine scored advisory on the same
+    # version must survive, and the notice must not be counted in its advisory list.
+    content = '[[package]]\nname = "chrono"\nversion = "0.4.45"\n'
+    diff = _diff("Cargo.lock", ['name = "chrono"', 'version = "0.4.45"'])
+    informational = {
+        "id": "RUSTSEC-2026-0543",
+        "affected": [{"ranges": [{"database_specific": {"informational": "unmaintained"}}]}],
+    }
+    real = {
+        "id": "RUSTSEC-2026-0001",
+        "affected": [{"ranges": [{"events": [{"introduced": "0"}, {"fixed": "0.4.46"}]}]}],
+        "database_specific": {"severity": "HIGH"},
+    }
+    ctx, kw = _ctx({"Cargo.lock": content}, vulns=[informational, real])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert "RUSTSEC-2026-0001" in findings[0].message
+    assert "RUSTSEC-2026-0543" not in findings[0].message
+    assert findings[0].fix_versions == ["0.4.46"]
+
+
+@pytest.mark.asyncio
 async def test_hash_pinned_vuln_still_flagged():
     # pip's own hash-pinning convention (--hash=...) used to make the fully-anchored
     # regex miss the pin entirely — exactly the security-conscious style that most
@@ -172,10 +223,29 @@ async def test_package_lock_transitive_vuln_flagged():
 
 
 @pytest.mark.asyncio
-async def test_go_sum_vuln_flagged():
+async def test_go_sum_ledger_is_not_a_build_list():
+    """Scan #38 (firecrawl, 2026-11-27): 43 of 92 findings came from go.sum lines.
+
+    go.sum is a checksum ledger for the module *graph* — it records versions MVS never
+    selects for the build. That module's go.mod requires only golang.org/x/net v0.55.0
+    and no x/crypto at all, yet six x/crypto versions in go.sum were each reported as a
+    vulnerable dependency. A version string being present in the repo is not evidence
+    that the binary contains it, so go.sum is not a vulnerability source.
+    """
     content = "github.com/foo/bar v1.2.3 h1:abc=\ngithub.com/foo/bar v1.2.3/go.mod h1:def=\n"
     diff = _diff("go.sum", ["github.com/foo/bar v1.2.3 h1:abc="])
     ctx, kw = _ctx({"go.sum": content}, vulns=[{"id": "GO-2023-0001"}])
+    findings = await check_vulnerabilities(diff, ctx, **kw)
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_go_mod_required_version_is_still_flagged():
+    """Negative control for the go.sum removal: go.mod's require/indirect block IS the
+    build list, so a vulnerable version there must still be reported."""
+    content = "module example.com/app\n\ngo 1.25.0\n\nrequire github.com/foo/bar v1.2.3\n"
+    diff = _diff("go.mod", ["require github.com/foo/bar v1.2.3"])
+    ctx, kw = _ctx({"go.mod": content}, vulns=[{"id": "GO-2023-0001"}])
     findings = await check_vulnerabilities(diff, ctx, **kw)
     assert len(findings) == 1
     assert "github.com/foo/bar" in findings[0].message
@@ -547,23 +617,30 @@ async def test_yarn_scoped_collision_anchors_own_entry():
 
 @pytest.mark.asyncio
 async def test_rung3_name_match_is_token_bounded():
-    # go.sum is a lockfile format the structural walker doesn't cover; its entries
-    # put name and version on ONE line. A bare substring rung anchored 'foo' on
-    # 'foobar's line when versions collided - the name must match as a whole token.
+    # Gemfile.lock (RubyGems) is a format the structural walker doesn't cover, and its
+    # entries put name and version on ONE line. A bare substring rung anchored 'foo' on
+    # 'foobar's line when versions collided — the name must match as a whole token.
+    # (Fixture moved off go.sum when go.sum stopped being a vulnerability source.)
     content = (
-        "example.com/foobar v1.0.0 h1:AAA=\n"
-        "example.com/foo v1.0.0 h1:BBB=\n"
+        "GEM\n"
+        "  remote: https://rubygems.org/\n"
+        "  specs:\n"
+        "    foobar (1.0.0)\n"
+        "    foo (1.0.0)\n"
+        "\n"
+        "PLATFORMS\n"
+        "  ruby\n"
     )
-    diff = _diff("go.sum", [
-        "example.com/foobar v1.0.0 h1:AAA=",
-        "example.com/foo v1.0.0 h1:BBB=",
+    diff = _diff("Gemfile.lock", [
+        "    foobar (1.0.0)",
+        "    foo (1.0.0)",
     ])
-    ctx, kw = _ctx({"go.sum": content}, vulns=[{"id": "GHSA-gggg"}])
+    ctx, kw = _ctx({"Gemfile.lock": content}, vulns=[{"id": "GHSA-gggg"}])
     findings = await check_vulnerabilities(diff, ctx, **kw)
     assert len(findings) == 2
     by_pkg = {f.message.split("==")[0]: f for f in findings}
-    assert by_pkg["example.com/foo"].line_start == 2
-    assert by_pkg["example.com/foobar"].line_start == 1
+    assert by_pkg["foo"].line_start == 2
+    assert by_pkg["foobar"].line_start == 1
 
 
 @pytest.mark.asyncio

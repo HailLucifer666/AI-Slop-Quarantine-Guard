@@ -93,6 +93,26 @@ class DomXssSite:
     label: str
 
 
+def _is_static_string_expr(node) -> bool:
+    """True when an expression is built only from string literals.
+
+    Scan #37 (obra/superpowers, 2026-11-27): a constant banner assigned as
+    ``el.innerHTML = '<div…>' + '<h2…>' + '<p…>'`` was reported as a DOM-XSS sink.
+    A sink is only a sink when something can reach it; a concatenation of literals
+    carries no input. Template literals with ``${…}`` are dynamic and stay flagged.
+    """
+    if node.type in ("string", "template_string"):
+        return not any(child.type == "template_substitution" for child in _iter_nodes(node))
+    if node.type == "parenthesized_expression":
+        inner = node.named_children[0] if node.named_children else None
+        return inner is not None and _is_static_string_expr(inner)
+    if node.type == "binary_expression":
+        return bool(node.named_children) and all(
+            _is_static_string_expr(child) for child in node.named_children
+        )
+    return False
+
+
 @dataclass(frozen=True)
 class CommentNode:
     """An actual comment node from the syntax tree."""
@@ -141,6 +161,7 @@ class FileAst:
         self._dom_xss: Optional[List[DomXssSite]] = None
         self._cp_execs: Optional[Set[str]] = None
         self._comments: Optional[List[CommentNode]] = None
+        self._string_lines: Optional[Set[int]] = None
 
     def call_sites(self) -> List[CallSite]:
         if self._calls is not None:
@@ -297,9 +318,47 @@ class FileAst:
                 if left is not None and left.type == "member_expression":
                     prop = left.child_by_field_name("property")
                     if prop is not None and _text(prop, src) == "innerHTML":
+                        right = node.child_by_field_name("right")
+                        if right is not None and _is_static_string_expr(right):
+                            continue  # literal markup cannot carry untrusted input
                         out.append(DomXssSite(node.start_point.row + 1, "innerHTML assignment"))
         self._dom_xss = out
         return out
+
+    def string_lines(self) -> Set[int]:
+        """1-based lines that are string DATA, not code: inside a multi-line literal.
+
+        Scan #38 (firecrawl, 2026-11-27): `ellipsis-only body at line 20: '...'` in
+        research_docs.py was a `...` prose line inside a module docstring. The
+        text-level string guard is line-local by construction, so a literal spanning
+        several lines was read as code. Interpolations (`${…}` in a template,
+        `{…}` in an f-string) ARE expressions, so their lines are removed from the
+        span — real code inside a template keeps being scanned.
+        """
+        if self._string_lines is not None:
+            return self._string_lines
+        skip: Set[int] = set()
+        for node in _iter_nodes(self.tree.root_node):
+            # Select on the node FAMILY, not one literal name: the grammar shipped with
+            # tree-sitter-language-pack 1.25 calls a Python docstring a `string`, while
+            # 1.28 calls it a `docstring` (verified against both parsers, 2026-11-27).
+            # CI runs 1.28 and local dev 1.25, so a literal match passed locally and
+            # failed only in CI — the same "cannot see its own input" class this change
+            # exists to remove. `string_content` children also match and add nothing:
+            # their span is inside the parent's.
+            if "string" not in node.type and node.type != "docstring":
+                continue
+            if node.start_point.row == node.end_point.row:
+                continue  # single-line: inside_string_literal already covers it
+            span = set(range(node.start_point.row + 1, node.end_point.row + 2))
+            for inner in _iter_nodes(node):
+                if inner.type in ("interpolation", "template_substitution"):
+                    span.difference_update(
+                        range(inner.start_point.row + 1, inner.end_point.row + 2)
+                    )
+            skip |= span
+        self._string_lines = skip
+        return skip
 
     def comment_nodes(self) -> List[CommentNode]:
         if self._comments is not None:

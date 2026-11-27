@@ -237,6 +237,31 @@ def _scan_with_ast(
     return findings
 
 
+def _innerhtml_rhs_is_static(line: str, after: int) -> bool:
+    """True when everything after ``=`` is string literals and ``+`` (line-local).
+
+    The regex fallback has no syntax tree, so this is a token-level approximation with
+    a deliberate bias: a trailing operator means the literal continues on the next line
+    — scan #37's constant banner (obra/superpowers) is exactly that shape — so it is
+    treated as static. Anything that is not a quoted literal or an operator makes the
+    line dynamic and it stays flagged. Quote-aware tokenisation matters: ``'<b>' + x``
+    must not read ``x`` as part of a literal.
+    """
+    rest = line[after:].strip()
+    if not rest:
+        return False
+    tokens = re.findall(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`[^`]*`|\S+", rest)
+    for tok in tokens:
+        if tok in ("+", "(", ")", ";"):
+            continue
+        if tok[0] in "'\"":
+            continue
+        if tok.startswith("`") and "${" not in tok:
+            continue
+        return False
+    return True
+
+
 def _scan_with_regex(
     path: str,
     added: List[Tuple[int, str]],
@@ -269,6 +294,8 @@ def _scan_with_regex(
                 continue
             if in_test and label in _TEST_SKIP_LABELS:
                 continue
+            if label == "innerHTML assignment" and _innerhtml_rhs_is_static(content, m.end()):
+                continue  # literal markup cannot carry untrusted input
             if (
                 inside_string_literal(content, m.start(), lang)
                 or (cstart != -1 and m.start() > cstart)

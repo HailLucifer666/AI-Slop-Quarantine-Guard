@@ -148,6 +148,61 @@ async def test_innerhtml_comparison_not_flagged():
 
 
 @pytest.mark.asyncio
+async def test_innerhtml_literal_only_markup_not_flagged():
+    """Scan #37 (obra/superpowers, 2026-11-27): a constant banner built by concatenating
+    string literals was reported as a DOM-XSS sink. A literal cannot carry untrusted
+    input, so there is no taint path to report."""
+    findings = await check_sast(
+        _diff("skills/brainstorming/scripts/helper.js", [
+            "    el.innerHTML = '<div style=\"max-width:480px\">' +",
+            "      '<h2 style=\"margin:0 0 .5rem\">Companion paused</h2>' +",
+            "      '<p style=\"margin:0;opacity:.85\">Stopped.</p></div>';",
+        ]),
+        {},
+    )
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_innerhtml_literal_concat_with_a_variable_still_flagged():
+    # Narrowness control: one non-literal operand makes it dynamic again.
+    findings = await check_sast(_diff("ui.js", ["  el.innerHTML = '<b>' + userInput"]), {})
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_innerhtml_template_interpolation_still_flagged():
+    findings = await check_sast(_diff("ui.js", ["  el.innerHTML = `<b>${userInput}</b>`"]), {})
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_innerhtml_ast_path_skips_static_markup_only():
+    # The Tree-sitter path is what the real repo scan used: the literal banner is
+    # skipped there too, while a variable assignment on the same file still reports.
+    src = (
+        "function showBanner(el) {\n"          # 1
+        "  el.innerHTML = '<div>' +\n"         # 2
+        "    '<p>Stopped</p></div>';\n"        # 3
+        "}\n"                                  # 4
+        "function paint(el, text) {\n"         # 5
+        "  el.innerHTML = text;\n"             # 6
+        "}\n"                                  # 7
+    )
+    ctx = {
+        "files": {"ui.js": src},
+        "added_by_file": {"ui.js": [
+            (2, "  el.innerHTML = '<div>' +"),
+            (3, "    '<p>Stopped</p></div>';"),
+            (6, "  el.innerHTML = text;"),
+        ]},
+    }
+    findings = await check_sast("", ctx)
+    assert len(findings) == 1
+    assert findings[0].line_start == 6
+
+
+@pytest.mark.asyncio
 async def test_method_eval_not_flagged():
     # `.eval()` is a method call (e.g. PyTorch model.eval()), NOT the builtin eval sink —
     # the `(?<![.\w])` lookbehind must keep it off these.
