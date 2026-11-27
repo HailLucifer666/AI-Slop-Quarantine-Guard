@@ -34,7 +34,7 @@ jobs:
     if: needs.key-guard.outputs.has_key == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The vendor requires Node 22.13+ within 22.x (or 24.x/26.x). Don't assume
       # the runner's default Node satisfies that — pin it.
