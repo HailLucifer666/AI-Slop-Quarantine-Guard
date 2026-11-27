@@ -204,6 +204,12 @@ _REVERSE_DNS = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+){2,}$")
 _CONST_VALUE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _DUNDER_SENTINEL = re.compile(r"^__[A-Za-z0-9_]+__$")
 
+# A lowercase, colon-namespaced identifier — a Redis/cache key, config path or metric
+# name (`wikipedia_enterprise:access_token`). Not a credential: it names the place a
+# secret lives. Every segment must start with a lowercase letter, so a word-like
+# prefix followed by a random token (`svc:9Qm2Lx8...`) is NOT covered.
+_NAMESPACED_ID = re.compile(r"^[a-z][a-z0-9_.-]*(?::[a-z][a-z0-9_.-]*)+$")
+
 # A quoted value that reads as an English phrase — letters, spaces, apostrophes,
 # hyphens, optional sentence punctuation, never a digit or symbol. Quoted tier only.
 _PROSE_VALUE = re.compile(r"^[A-Za-z][A-Za-z' \-]*[.!?]?$")
@@ -236,6 +242,12 @@ def _looks_nonsecret_value(value: str) -> bool:
     if _REVERSE_DNS.match(v):
         return True
     if _SLUG_VALUE.match(v) and not any(ch.isdigit() for ch in v):
+        return True
+    # Scan #38 (firecrawl, 2026-11-27): `REDIS_TOKEN_KEY = "wikipedia_enterprise:
+    # access_token"` was reported as a hardcoded credential. A namespaced identifier
+    # is the key a token is stored under, not the token; the credential-word match came
+    # from the variable name, and the value is plainly not a secret.
+    if _NAMESPACED_ID.match(v):
         return True
     # Entropy floor for non-spacey tokens: real random secrets/passwords exceed 2.7
     # bits/char; repetitive or low-entropy identifiers do not.

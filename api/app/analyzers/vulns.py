@@ -429,6 +429,28 @@ def _replacement_line(snippet: str, name: str, version: str, fixed: str) -> Opti
     return snippet.replace(version, fixed, 1)
 
 
+def _is_informational(vuln: dict) -> bool:
+    """True when OSV marks this record as a notice rather than a vulnerability.
+
+    Scan #38 (firecrawl, 2026-11-27): RUSTSEC-2026-0543 ("chrono is unmaintained")
+    was reported as a HIGH vulnerability for chrono==0.4.45 in two Cargo.lock files.
+    OSV carries ``database_specific.informational: "unmaintained"`` — per affected
+    range, not per record — with no ``fixed`` event and no severity. There is no
+    exploitable defect to report and no version to upgrade to, so the only remediation
+    this rule could offer is false advice. SQG004 is "known-vulnerable dependencies";
+    an unmaintained notice is a different rule that does not exist yet.
+    """
+    for affected in vuln.get("affected") or []:
+        if not isinstance(affected, dict):
+            continue
+        if (affected.get("database_specific") or {}).get("informational"):
+            return True
+        for rng in affected.get("ranges") or []:
+            if isinstance(rng, dict) and (rng.get("database_specific") or {}).get("informational"):
+                return True
+    return False
+
+
 def _vuln_finding(
     name: str, version: str, vulns: list, path: str, line: int, snippet: Optional[str] = None
 ) -> Finding:
@@ -600,8 +622,13 @@ async def check_vulnerabilities(
 
     findings: List[Finding] = []
     for pin in pin_order:
-        vulns = results.get(pin)
-        if not vulns:  # None (outage) or [] (clean) → no finding
+        advisories = results.get(pin)
+        if not advisories:  # None (outage) or [] (clean) → no finding
+            continue
+        # Filter per advisory, not per pin: a real advisory beside a notice still
+        # reports, and the notice is not counted in its advisory list.
+        vulns = [v for v in advisories if not _is_informational(v)]
+        if not vulns:
             continue
         locs = by_pin[pin]
         path, line = locs[0]

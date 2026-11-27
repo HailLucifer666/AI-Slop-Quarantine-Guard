@@ -103,6 +103,71 @@ async def test_prose_placeholder_flagged():
     assert len(findings) == 1
 
 
+@pytest.mark.asyncio
+async def test_ellipsis_inside_a_multiline_docstring_not_flagged():
+    """Scan #38 (firecrawl, 2026-11-27): `ellipsis-only body at line 20: '...'` in
+    research_docs.py was a `...` prose line inside the module docstring. The
+    text-level string guard is line-local by construction, so a literal spanning
+    several lines was read as code.
+    """
+    src = (
+        '"""Module docs for the research index.\n'
+        "\n"
+        "continued below \u2026\n"
+        "...\n"
+        '"""\n'
+        "x = 1\n"
+    )
+    ctx = {
+        "files": {"research_docs.py": src},
+        "added_by_file": {"research_docs.py": list(enumerate(src.splitlines(), 1))},
+    }
+    assert await check_placeholders("", ctx) == []
+
+
+@pytest.mark.asyncio
+async def test_real_ellipsis_stub_beside_a_docstring_still_flagged():
+    # Control: multi-line string spans must not disarm the rule for actual code.
+    src = (
+        '"""Docs.\n'
+        "\n"
+        "...\n"
+        '"""\n'
+        "def f():\n"
+        "    ...\n"
+    )
+    ctx = {
+        "files": {"stub.py": src},
+        "added_by_file": {"stub.py": list(enumerate(src.splitlines(), 1))},
+    }
+    findings = await check_placeholders("", ctx)
+    assert len(findings) == 1
+    assert findings[0].line_start == 6
+
+
+@pytest.mark.asyncio
+async def test_placeholder_prose_does_not_match_an_ordinary_sentence():
+    """Scan #38 (firecrawl, 2026-11-27): a module doc comment —
+
+        * config and read by the rest of the code.
+
+    was reported as "placeholder prose at line 3". The phrases identify a stub only
+    when they ARE the comment body, not when a sentence happens to contain them; and
+    "rest of the code" without "here" is ordinary English. Anchor to the comment and
+    keep the explicit-stub arm only.
+    """
+    findings = await check_placeholders(
+        _diff("apps/api/src/service/service.ts", [
+            "/*",
+            " * The service: what one deployment of the API is made of, built once from a",
+            " * config and read by the rest of the code.",
+            " */",
+        ]),
+        {},
+    )
+    assert findings == []
+
+
 # --- low-noise controls ---------------------------------------------------
 
 @pytest.mark.asyncio

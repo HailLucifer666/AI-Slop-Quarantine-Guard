@@ -27,6 +27,32 @@ async def test_sequential_placeholder_not_flagged():
 
 
 @pytest.mark.asyncio
+async def test_namespaced_cache_key_is_not_a_credential():
+    """Scan #38 (firecrawl, 2026-11-27): a Redis cache-key constant was reported as a
+    hardcoded credential because its identifier ends in _KEY and the value is long.
+
+        const REDIS_TOKEN_KEY = "wikipedia_enterprise:access_token";
+
+    The value is a namespaced identifier (service:object) — the key an access token is
+    cached *under*, not the token. No credential is stored in it.
+    """
+    diff = _diff(
+        "apps/api/src/scraper/scrapeURL/engines/wikipedia/index.ts",
+        ['const REDIS_TOKEN_KEY = "wikipedia_enterprise:access_token";'],
+    )
+    assert await check_secrets(diff, {}) == []
+
+
+@pytest.mark.asyncio
+async def test_colon_bearing_random_token_still_flagged():
+    # Narrowness control: a real random secret that happens to contain a colon must
+    # not be swallowed by the namespaced-identifier guard — its tail is not a word.
+    diff = _diff("app/config.py", ['DB_TOKEN = "svc:9Qm2Lx8Vt4Rz7Kp1Nd6B"'])
+    findings = await check_secrets(diff, {})
+    assert len(findings) == 1
+
+
+@pytest.mark.asyncio
 async def test_env_local_secret_not_blocked():
     # A token in a local, gitignored .env.local is not a committed leak.
     diff = _diff("my-agent/.env.local", ['VERCEL_OIDC_TOKEN = "eyJhbGciOiJIUzI1NiscompactJWTvalue"'])
