@@ -80,6 +80,41 @@ def test_package_json_sections_and_filters():
     assert set(deps) == {"left-pad", "@scope/pkg", "jest"}  # 'local' filtered, scripts ignored
 
 
+def test_package_json_npm_alias_resolves_to_the_installed_package():
+    """Scan #38 (firecrawl, 2026-11-27): `"typescript-7": "npm:typescript@7.0.2"` was
+    reported as `Package 'typescript-7' does not exist in npm (404)` — CERTAIN and
+    block-eligible — because the local alias *label* was sent to the registry as if it
+    were a package name. `npm:` aliases install the target package under a different
+    local name, so the target is the only name the registry can answer about. The label
+    404s by design and that is not evidence of anything.
+    """
+    content = """
+{
+  "dependencies": {
+    "typescript-7": "npm:typescript@7.0.2",
+    "react-next": "npm:react@19.0.0",
+    "scoped-alias": "npm:@scope/pkg@1.2.3",
+    "left-pad": "^1.0.0"
+  }
+}
+"""
+    deps = parse_package_json(content)
+    assert set(deps) == {"typescript", "react", "@scope/pkg", "left-pad"}
+    assert "typescript-7" not in deps
+
+
+def test_package_json_unreadable_spec_scheme_is_never_a_package_name():
+    """A spec whose protocol the parser cannot interpret must produce no claim at all.
+
+    Before this, any `scheme:` spec missing from the non-registry prefix list fell
+    through as a package *name*, so an unread spec could 404 into a CERTAIN,
+    block-eligible "hallucinated package" — a confident false statement about a
+    dependency we never identified. Silence is the honest answer here; a guess is not.
+    """
+    content = '{"dependencies": {"mystery": "quantum:thing@1.0.0"}}'
+    assert parse_package_json(content) == {}
+
+
 def test_cargo_sections_and_filters():
     content = """
 [dependencies]
